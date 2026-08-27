@@ -3,6 +3,8 @@ export interface CommandSpec {
   args?: string[];
   cwd?: string;
   timeoutMs?: number;
+  timeoutGraceMs?: number;
+  maxOutputBytes?: number;
   env?: Record<string, string | undefined>;
 }
 
@@ -12,6 +14,8 @@ export interface CommandResult {
   cwd: string;
   exitCode: number | null;
   timedOut: boolean;
+  outputLimitExceeded: boolean;
+  outputTruncated: boolean;
   durationMs: number;
   stdout: string;
   stderr: string;

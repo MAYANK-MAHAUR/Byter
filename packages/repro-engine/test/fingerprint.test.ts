@@ -32,4 +32,13 @@ describe("failure fingerprints", () => {
       )
     ).toBe(false);
   });
+
+  it("requires actual locations when expected fingerprint is location-specific", () => {
+    expect(
+      matchFingerprints(
+        { errorType: "TypeError", message: "Cannot read properties", file: "src/tokenizer.ts", line: 3 },
+        { errorType: "TypeError", message: "Cannot read properties" }
+      )
+    ).toBe(false);
+  });
 });

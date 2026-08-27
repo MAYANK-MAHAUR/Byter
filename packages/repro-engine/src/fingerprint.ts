@@ -35,12 +35,28 @@ export function matchFingerprints(expected: FailureFingerprint, actual: FailureF
     return false;
   }
 
-  if (expected.file && actual.file && normalizePath(expected.file) !== normalizePath(actual.file)) {
-    return false;
+  if (expected.file) {
+    if (!actual.file || normalizePath(expected.file) !== normalizePath(actual.file)) {
+      return false;
+    }
   }
 
-  if (expected.line !== undefined && actual.line !== undefined && expected.line !== actual.line) {
-    return false;
+  if (expected.line !== undefined) {
+    if (actual.line === undefined || expected.line !== actual.line) {
+      return false;
+    }
+  }
+
+  if (expected.column !== undefined) {
+    if (actual.column === undefined || expected.column !== actual.column) {
+      return false;
+    }
+  }
+
+  if (expected.stackFrame !== undefined) {
+    if (actual.stackFrame === undefined || expected.stackFrame !== actual.stackFrame) {
+      return false;
+    }
   }
 
   return true;

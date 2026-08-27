@@ -37,4 +37,24 @@ describe("reproduction verifier", () => {
 
     expect(verification.status).toBe("not-reproduced");
   });
+
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    "rejects invalid run count %s",
+    async (runs) => {
+      await expect(
+        verifyReproduction({
+          runs,
+          command: {
+            command: process.execPath,
+            args: ["-e", "console.log('unused')"],
+            timeoutMs: 5_000
+          },
+          expected: {
+            errorType: "TypeError",
+            message: "Cannot read properties of undefined"
+          }
+        })
+      ).rejects.toThrow("positive integer");
+    }
+  );
 });

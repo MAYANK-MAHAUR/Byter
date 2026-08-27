@@ -9,7 +9,7 @@ export interface VerifyReproductionOptions {
 }
 
 export async function verifyReproduction(options: VerifyReproductionOptions): Promise<ReproductionVerification> {
-  const runs = options.runs ?? 3;
+  const runs = normalizeRunCount(options.runs ?? 3);
   const attempts: ReproductionAttempt[] = [];
 
   for (let index = 1; index <= runs; index += 1) {
@@ -31,4 +31,12 @@ export async function verifyReproduction(options: VerifyReproductionOptions): Pr
     attempts,
     expected: options.expected
   };
+}
+
+function normalizeRunCount(runs: number): number {
+  if (!Number.isFinite(runs) || !Number.isInteger(runs) || runs < 1) {
+    throw new Error("Reproduction run count must be a positive integer");
+  }
+
+  return runs;
 }
