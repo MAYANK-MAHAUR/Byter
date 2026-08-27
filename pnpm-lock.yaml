@@ -18,6 +18,19 @@ importers:
         specifier: ^2.1.1
         version: 2.1.9(@types/node@22.20.1)
 
+  apps/github-mcp:
+    dependencies:
+      '@reprosmith/github':
+        specifier: workspace:*
+        version: link:../../packages/github
+    devDependencies:
+      typescript:
+        specifier: ^5.5.4
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.1
+        version: 2.1.9(@types/node@22.20.1)
+
   demo/buggy-parser:
     devDependencies:
       typescript:
@@ -29,6 +42,18 @@ importers:
 
   packages/core:
     devDependencies:
+      typescript:
+        specifier: ^5.5.4
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.1
+        version: 2.1.9(@types/node@22.20.1)
+
+  packages/github:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
       typescript:
         specifier: ^5.5.4
         version: 5.9.3
