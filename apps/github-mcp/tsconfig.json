@@ -1,9 +1,13 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    "baseUrl": ".",
     "composite": true,
     "outDir": "dist",
-    "rootDir": "src"
+    "rootDir": "src",
+    "paths": {
+      "@reprosmith/github": ["../../packages/github/src/index.js"]
+    }
   },
   "references": [{ "path": "../../packages/github" }],
   "include": ["src/**/*.ts"],
