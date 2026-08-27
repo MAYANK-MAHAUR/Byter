@@ -1,12 +1,13 @@
+import { createHash } from "node:crypto";
 import type { GitHubRestClient } from "@reprosmith/github";
 
 export interface ApprovalContext {
   approved: boolean;
-  payloadHash?: string;
   expectedPayloadHash?: string;
 }
 
 export type GitHubMcpToolName = "read_issue" | "read_file" | "add_verified_label" | "comment_on_issue";
+export type GitHubMcpWriteToolName = Extract<GitHubMcpToolName, "add_verified_label" | "comment_on_issue">;
 
 export interface GitHubMcpToolCall {
   name: GitHubMcpToolName;
@@ -60,14 +61,14 @@ export function createGitHubMcpTools({ client }: GitHubMcpServerOptions) {
         }
 
         case "add_verified_label": {
-          assertApproved(call.approval);
+          assertApproved(call.approval, approvalPayloadHash(call.name, call.arguments));
           const { owner, repo, issueNumber } = parseRepoIssueArgs(call.arguments);
           await client.addLabels(owner, repo, issueNumber, ["reprosmith:verified"]);
           return textResult("Added reprosmith:verified label.");
         }
 
         case "comment_on_issue": {
-          assertApproved(call.approval);
+          assertApproved(call.approval, approvalPayloadHash(call.name, call.arguments));
           const { owner, repo, issueNumber } = parseRepoIssueArgs(call.arguments);
           const body = expectString(call.arguments.body, "body");
           const comment = await client.createIssueComment(owner, repo, issueNumber, body);
@@ -78,22 +79,70 @@ export function createGitHubMcpTools({ client }: GitHubMcpServerOptions) {
   };
 }
 
+export function approvalPayloadHash(name: GitHubMcpWriteToolName, args: Record<string, unknown>): string {
+  return createHash("sha256").update(stableStringify(canonicalWritePayload(name, args))).digest("hex");
+}
+
 function textResult(text: string): GitHubMcpToolResult {
   return { content: [{ type: "text", text }] };
 }
 
-function assertApproved(approval: ApprovalContext | undefined): void {
+function assertApproved(approval: ApprovalContext | undefined, actualPayloadHash: string): void {
   if (!approval?.approved) {
     throw new Error("GitHub write blocked: approval is required");
   }
 
-  if (
-    approval.expectedPayloadHash &&
-    approval.payloadHash &&
-    approval.expectedPayloadHash !== approval.payloadHash
-  ) {
+  if (!approval.expectedPayloadHash) {
+    throw new Error("GitHub write blocked: approval payload hash is required");
+  }
+
+  if (approval.expectedPayloadHash !== actualPayloadHash) {
     throw new Error("GitHub write blocked: approval payload hash mismatch");
   }
+}
+
+function canonicalWritePayload(name: GitHubMcpWriteToolName, args: Record<string, unknown>) {
+  switch (name) {
+    case "add_verified_label": {
+      return {
+        tool: name,
+        arguments: {
+          ...parseRepoIssueArgs(args),
+          labels: ["reprosmith:verified"]
+        }
+      };
+    }
+
+    case "comment_on_issue": {
+      return {
+        tool: name,
+        arguments: {
+          ...parseRepoIssueArgs(args),
+          body: expectString(args.body, "body")
+        }
+      };
+    }
+  }
+}
+
+function stableStringify(value: unknown): string {
+  return JSON.stringify(sortValue(value));
+}
+
+function sortValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(sortValue);
+  }
+
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, nested]) => [key, sortValue(nested)])
+    );
+  }
+
+  return value;
 }
 
 function parseRepoIssueArgs(args: Record<string, unknown>) {

@@ -34,18 +34,18 @@ export class GitHubRestClient {
   }
 
   async getIssue(owner: string, repo: string, issueNumber: number): Promise<GitHubIssue> {
-    return this.request<GitHubIssue>(`/repos/${owner}/${repo}/issues/${issueNumber}`);
+    return this.request<GitHubIssue>(`${repoBasePath(owner, repo)}/issues/${validateIssueNumber(issueNumber)}`);
   }
 
   async getFile(owner: string, repo: string, path: string, ref?: string): Promise<GitHubContentFile> {
     const params = ref ? `?ref=${encodeURIComponent(ref)}` : "";
     return this.request<GitHubContentFile>(
-      `/repos/${owner}/${repo}/contents/${encodePath(path)}${params}`
+      `${repoBasePath(owner, repo)}/contents/${encodeRepositoryPath(path)}${params}`
     );
   }
 
   async addLabels(owner: string, repo: string, issueNumber: number, labels: string[]): Promise<void> {
-    await this.request(`/repos/${owner}/${repo}/issues/${issueNumber}/labels`, {
+    await this.request(`${repoBasePath(owner, repo)}/issues/${validateIssueNumber(issueNumber)}/labels`, {
       method: "POST",
       body: JSON.stringify({ labels })
     });
@@ -57,7 +57,7 @@ export class GitHubRestClient {
     issueNumber: number,
     body: string
   ): Promise<{ html_url: string }> {
-    return this.request<{ html_url: string }>(`/repos/${owner}/${repo}/issues/${issueNumber}/comments`, {
+    return this.request<{ html_url: string }>(`${repoBasePath(owner, repo)}/issues/${validateIssueNumber(issueNumber)}/comments`, {
       method: "POST",
       body: JSON.stringify({ body })
     });
@@ -89,9 +89,47 @@ export class GitHubRestClient {
   }
 }
 
-function encodePath(path: string): string {
+function repoBasePath(owner: string, repo: string): string {
+  return `/repos/${encodeOwner(owner)}/${encodeRepo(repo)}`;
+}
+
+function encodeOwner(owner: string): string {
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(owner)) {
+    throw new Error("Invalid GitHub owner");
+  }
+
+  return encodeURIComponent(owner);
+}
+
+function encodeRepo(repo: string): string {
+  if (!/^[A-Za-z0-9._-]{1,100}$/.test(repo)) {
+    throw new Error("Invalid GitHub repository name");
+  }
+
+  return encodeURIComponent(repo);
+}
+
+function validateIssueNumber(issueNumber: number): number {
+  if (!Number.isInteger(issueNumber) || issueNumber < 1) {
+    throw new Error("Invalid GitHub issue number");
+  }
+
+  return issueNumber;
+}
+
+function encodeRepositoryPath(path: string): string {
+  if (path.length === 0 || path.startsWith("/") || path.includes("\\")) {
+    throw new Error("Invalid GitHub repository path");
+  }
+
   return path
     .split("/")
-    .map((segment) => encodeURIComponent(segment))
+    .map((segment) => {
+      if (segment.length === 0 || segment === "." || segment === "..") {
+        throw new Error("Invalid GitHub repository path");
+      }
+
+      return encodeURIComponent(segment);
+    })
     .join("/");
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createGitHubMcpTools, listGitHubTools } from "../src/index.js";
+import { approvalPayloadHash, createGitHubMcpTools, listGitHubTools } from "../src/index.js";
 
 describe("GitHub MCP tools", () => {
   it("exposes read and approved write tools", () => {
@@ -46,14 +46,50 @@ describe("GitHub MCP tools", () => {
     expect(client.addLabels).not.toHaveBeenCalled();
   });
 
-  it("allows writes with matching approval payload hash", async () => {
+  it("blocks writes without a payload-specific approval hash", async () => {
+    const client = { addLabels: vi.fn() };
+    const tools = createGitHubMcpTools({ client: client as never });
+
+    await expect(
+      tools.callTool({
+        name: "add_verified_label",
+        arguments: { owner: "o", repo: "r", issueNumber: 3 },
+        approval: { approved: true }
+      })
+    ).rejects.toThrow("approval payload hash is required");
+
+    expect(client.addLabels).not.toHaveBeenCalled();
+  });
+
+  it("blocks writes when approval was for a different payload", async () => {
+    const client = { addLabels: vi.fn() };
+    const tools = createGitHubMcpTools({ client: client as never });
+    const hashForIssueThree = approvalPayloadHash("add_verified_label", {
+      owner: "o",
+      repo: "r",
+      issueNumber: 3
+    });
+
+    await expect(
+      tools.callTool({
+        name: "add_verified_label",
+        arguments: { owner: "o", repo: "r", issueNumber: 4 },
+        approval: { approved: true, expectedPayloadHash: hashForIssueThree }
+      })
+    ).rejects.toThrow("approval payload hash mismatch");
+
+    expect(client.addLabels).not.toHaveBeenCalled();
+  });
+
+  it("allows writes with a matching payload-specific approval hash", async () => {
     const client = { addLabels: vi.fn().mockResolvedValue(undefined) };
     const tools = createGitHubMcpTools({ client: client as never });
+    const args = { owner: "o", repo: "r", issueNumber: 3 };
 
     await tools.callTool({
       name: "add_verified_label",
-      arguments: { owner: "o", repo: "r", issueNumber: 3 },
-      approval: { approved: true, payloadHash: "abc", expectedPayloadHash: "abc" }
+      arguments: args,
+      approval: { approved: true, expectedPayloadHash: approvalPayloadHash("add_verified_label", args) }
     });
 
     expect(client.addLabels).toHaveBeenCalledWith("o", "r", 3, ["reprosmith:verified"]);
