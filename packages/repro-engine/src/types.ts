@@ -49,3 +49,43 @@ export interface MinimizationResult {
   source: string;
   removedLineNumbers: number[];
 }
+
+export interface PatchFileChange {
+  path: string;
+  before: string;
+  after: string;
+}
+
+export interface CandidatePatch {
+  files: PatchFileChange[];
+}
+
+export interface ValidationCommand {
+  command: string;
+  args?: string[];
+  relativeCwd?: string;
+  timeoutMs?: number;
+  timeoutGraceMs?: number;
+  maxOutputBytes?: number;
+}
+
+export interface PatchValidationInput {
+  workspacePath: string;
+  patch: CandidatePatch;
+  reproductionCommand: ValidationCommand;
+  expectedFailure: FailureFingerprint;
+  setupCommand?: ValidationCommand;
+  regressionCommand?: ValidationCommand;
+  protectedPaths?: string[];
+  workspaceCopyExcludes?: string[];
+}
+
+export interface PatchValidationResult {
+  status: "patch-ready" | "patch-failed";
+  setup?: CommandResult;
+  before: ReproductionVerification;
+  after: CommandResult;
+  regressions?: CommandResult;
+  filesChanged: string[];
+  reason?: string;
+}
