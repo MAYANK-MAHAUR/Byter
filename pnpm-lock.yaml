@@ -40,6 +40,22 @@ importers:
         specifier: ^2.1.1
         version: 2.1.9(@types/node@22.20.1)
 
+  packages/agent:
+    dependencies:
+      '@reprosmith/core':
+        specifier: workspace:*
+        version: link:../core
+      '@truefoundry/trueforge-sdk':
+        specifier: 0.1.0-rc.1
+        version: 0.1.0-rc.1
+    devDependencies:
+      typescript:
+        specifier: ^5.5.4
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.1
+        version: 2.1.9(@types/node@22.20.1)
+
   packages/core:
     devDependencies:
       typescript:
@@ -334,6 +350,10 @@ packages:
     resolution: {integrity: sha512-hncn90N4sOky0L2LKE5oESKLbxCPeVo4eLA2LSMoDzM+879ml4WSr+Rr4DWknNIVVvS1Hirkc9hx02W6YxS8rQ==}
     cpu: [x64]
     os: [win32]
+
+  '@truefoundry/trueforge-sdk@0.1.0-rc.1':
+    resolution: {integrity: sha512-5GhBVqegPVOdN49Q/S2uvQFL28cwqG5yjbklazTsZNWELbTtPX9hchetB54xW6Mr/uMHxOEWsOTJnYVHpZYX7Q==}
+    engines: {node: '>=18.0.0'}
 
   '@types/estree@1.0.9':
     resolution: {integrity: sha512-GhdPgy1el4/ImP05X05Uw4cw2/M93BCUmnEvWZNStlCzEKME4Fkk+YpoA5OiHNQmoS7Cafb8Xa3Pya8m1Qrzeg==}
@@ -707,6 +727,8 @@ snapshots:
 
   '@rollup/rollup-win32-x64-msvc@4.63.0':
     optional: true
+
+  '@truefoundry/trueforge-sdk@0.1.0-rc.1': {}
 
   '@types/estree@1.0.9': {}
 
