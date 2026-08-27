@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { ReproSmithTrueForgeRuntime, buildInitialUserMessage, buildReproSmithAgentSpec } from "../src/index.js";
+import {
+  ReproSmithTrueForgeRuntime,
+  TrueForgeInitialTurnError,
+  buildInitialUserMessage,
+  buildReproSmithAgentSpec
+} from "../src/index.js";
 
 const config = {
   baseUrl: "https://trueforge.example",
@@ -81,5 +86,63 @@ describe("ReproSmith TrueForge runtime", () => {
     await expect(runtime.listSessionEvents("session_1")).resolves.toEqual([
       { sequenceNumber: 2, type: "sandbox.created", raw: { sequenceNumber: 2, event: { type: "sandbox.created" } } }
     ]);
+  });
+
+  it("deletes the created session if initial turn creation fails", async () => {
+    const client = {
+      sessions: {
+        create: vi.fn().mockResolvedValue({ id: "session_1", title: null }),
+        createTurn: vi.fn().mockRejectedValue(new Error("turn failed")),
+        delete: vi.fn().mockResolvedValue(undefined),
+        listEvents: vi.fn()
+      }
+    };
+    const runtime = new ReproSmithTrueForgeRuntime(config, client);
+
+    await expect(
+      runtime.startSession({
+        issueUrl: "https://github.com/MAYANK-MAHAUR/Byter/issues/1",
+        issueTitle: "Bug",
+        issueBody: "Breaks",
+        repository: "MAYANK-MAHAUR/Byter"
+      })
+    ).rejects.toMatchObject({
+      name: "TrueForgeInitialTurnError",
+      details: {
+        session: { id: "session_1", title: null },
+        cleanupAttempted: true,
+        cleanupSucceeded: true
+      }
+    });
+
+    expect(client.sessions.delete).toHaveBeenCalledWith("session_1");
+  });
+
+  it("exposes the created session when cleanup is unavailable", async () => {
+    const client = {
+      sessions: {
+        create: vi.fn().mockResolvedValue({ id: "session_1", title: "Recovered" }),
+        createTurn: vi.fn().mockRejectedValue(new Error("turn failed")),
+        listEvents: vi.fn()
+      }
+    };
+    const runtime = new ReproSmithTrueForgeRuntime(config, client);
+
+    try {
+      await runtime.startSession({
+        issueUrl: "https://github.com/MAYANK-MAHAUR/Byter/issues/1",
+        issueTitle: "Bug",
+        issueBody: "Breaks",
+        repository: "MAYANK-MAHAUR/Byter"
+      });
+      throw new Error("Expected startSession to fail");
+    } catch (error) {
+      expect(error).toBeInstanceOf(TrueForgeInitialTurnError);
+      expect((error as TrueForgeInitialTurnError).details).toMatchObject({
+        session: { id: "session_1", title: "Recovered" },
+        cleanupAttempted: false,
+        cleanupSucceeded: false
+      });
+    }
   });
 });

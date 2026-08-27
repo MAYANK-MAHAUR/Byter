@@ -4,11 +4,22 @@ import type {
   StartReproSmithSessionInput,
   StartReproSmithSessionResult,
   TrueForgeClientLike,
+  TrueForgePartialSessionFailureDetails,
   TrueForgeRuntimeConfig,
   TrueForgeRuntimeEvent,
   TrueForgeSession,
   TrueForgeTurn
 } from "./types.js";
+
+export class TrueForgeInitialTurnError extends Error {
+  readonly details: TrueForgePartialSessionFailureDetails;
+
+  constructor(details: TrueForgePartialSessionFailureDetails) {
+    super(`TrueForge initial turn failed for created session ${details.session.id}`);
+    this.name = "TrueForgeInitialTurnError";
+    this.details = details;
+  }
+}
 
 export class ReproSmithTrueForgeRuntime {
   private readonly client: TrueForgeClientLike;
@@ -33,16 +44,21 @@ export class ReproSmithTrueForgeRuntime {
       })
     );
 
-    const turn = normalizeTurn(
-      await this.client.sessions.createTurn(session.id, {
-        input: [
-          {
-            type: "user.message",
-            content: buildInitialUserMessage(input)
-          }
-        ]
-      })
-    );
+    let turn: TrueForgeTurn;
+    try {
+      turn = normalizeTurn(
+        await this.client.sessions.createTurn(session.id, {
+          input: [
+            {
+              type: "user.message",
+              content: buildInitialUserMessage(input)
+            }
+          ]
+        })
+      );
+    } catch (cause) {
+      throw await this.handleInitialTurnFailure(session, cause);
+    }
 
     return { session, turn };
   }
@@ -65,6 +81,35 @@ export class ReproSmithTrueForgeRuntime {
     }
 
     return events;
+  }
+
+  private async handleInitialTurnFailure(session: TrueForgeSession, cause: unknown): Promise<TrueForgeInitialTurnError> {
+    if (!this.client.sessions.delete) {
+      return new TrueForgeInitialTurnError({
+        session,
+        cause,
+        cleanupAttempted: false,
+        cleanupSucceeded: false
+      });
+    }
+
+    try {
+      await this.client.sessions.delete(session.id);
+      return new TrueForgeInitialTurnError({
+        session,
+        cause,
+        cleanupAttempted: true,
+        cleanupSucceeded: true
+      });
+    } catch (cleanupError) {
+      return new TrueForgeInitialTurnError({
+        session,
+        cause,
+        cleanupAttempted: true,
+        cleanupSucceeded: false,
+        cleanupError
+      });
+    }
   }
 }
 
