@@ -3,6 +3,7 @@
   "references": [
     { "path": "./packages/core" },
     { "path": "./packages/github" },
+    { "path": "./packages/agent" },
     { "path": "./apps/github-mcp" },
     { "path": "./demo/buggy-parser" }
   ]
