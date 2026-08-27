@@ -65,6 +65,8 @@ export interface ValidationCommand {
   args?: string[];
   relativeCwd?: string;
   timeoutMs?: number;
+  timeoutGraceMs?: number;
+  maxOutputBytes?: number;
 }
 
 export interface PatchValidationInput {
@@ -72,12 +74,15 @@ export interface PatchValidationInput {
   patch: CandidatePatch;
   reproductionCommand: ValidationCommand;
   expectedFailure: FailureFingerprint;
+  setupCommand?: ValidationCommand;
   regressionCommand?: ValidationCommand;
   protectedPaths?: string[];
+  workspaceCopyExcludes?: string[];
 }
 
 export interface PatchValidationResult {
   status: "patch-ready" | "patch-failed";
+  setup?: CommandResult;
   before: ReproductionVerification;
   after: CommandResult;
   regressions?: CommandResult;
