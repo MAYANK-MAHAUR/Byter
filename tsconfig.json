@@ -1,5 +1,7 @@
 {
   "files": [],
-  "references": []
+  "references": [
+    { "path": "./packages/core" },
+    { "path": "./demo/buggy-parser" }
+  ]
 }
-
