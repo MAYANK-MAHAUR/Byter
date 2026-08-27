@@ -4,6 +4,7 @@
     { "path": "./packages/core" },
     { "path": "./packages/github" },
     { "path": "./packages/agent" },
+    { "path": "./packages/repro-engine" },
     { "path": "./apps/github-mcp" },
     { "path": "./demo/buggy-parser" }
   ]
