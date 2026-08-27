@@ -1,9 +1,13 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    "baseUrl": ".",
     "composite": true,
     "outDir": "dist",
-    "rootDir": "src"
+    "rootDir": "src",
+    "paths": {
+      "@reprosmith/core": ["../core/src/index.js"]
+    }
   },
   "references": [{ "path": "../core" }],
   "include": ["src/**/*.ts"],

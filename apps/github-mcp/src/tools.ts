@@ -1,5 +1,22 @@
 import { createHash } from "node:crypto";
-import type { GitHubRestClient } from "@reprosmith/github";
+
+export interface GitHubRestClientLike {
+  getIssue(owner: string, repo: string, issueNumber: number): Promise<{
+    number: number;
+    title: string;
+    body: string | null;
+    html_url: string;
+    state: string;
+  }>;
+  getFile(owner: string, repo: string, path: string, ref?: string): Promise<{
+    path: string;
+    sha: string;
+    encoding: string;
+    content: string;
+  }>;
+  addLabels(owner: string, repo: string, issueNumber: number, labels: string[]): Promise<void>;
+  createIssueComment(owner: string, repo: string, issueNumber: number, body: string): Promise<{ html_url: string }>;
+}
 
 export interface ApprovalContext {
   approved: boolean;
@@ -20,7 +37,7 @@ export interface GitHubMcpToolResult {
 }
 
 export interface GitHubMcpServerOptions {
-  client: GitHubRestClient;
+  client: GitHubRestClientLike;
 }
 
 export function listGitHubTools(): Array<{ name: GitHubMcpToolName; description: string; requiresApproval: boolean }> {

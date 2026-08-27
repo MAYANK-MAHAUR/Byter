@@ -1,11 +1,15 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    "baseUrl": ".",
     "declaration": false,
     "jsx": "react-jsx",
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "noEmit": true,
+    "paths": {
+      "@reprosmith/core": ["../../packages/core/src/index.js"]
+    },
     "sourceMap": false,
     "types": ["vite/client"]
   },

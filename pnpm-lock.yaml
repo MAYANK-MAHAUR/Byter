@@ -19,10 +19,6 @@ importers:
         version: 2.1.9(@types/node@22.20.1)(lightningcss@1.33.0)
 
   apps/github-mcp:
-    dependencies:
-      '@reprosmith/github':
-        specifier: workspace:*
-        version: link:../../packages/github
     devDependencies:
       typescript:
         specifier: ^5.5.4

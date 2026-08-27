@@ -13,8 +13,21 @@ import {
   Timer,
   X
 } from "lucide-react";
-import type { ComponentType } from "react";
-import { demoRun, statusLabels, type ApprovalAction, type EvidenceItem } from "./data";
+import { useEffect, useMemo, useState, type ComponentType } from "react";
+import type { RunEvent, RunStatus } from "@reprosmith/core";
+import {
+  readApprovalSubmission,
+  submitApprovalAction,
+  type ApprovalSubmission
+} from "./approval-client";
+import {
+  demoRun,
+  happyPathStatuses,
+  statusLabels,
+  type ApprovalAction,
+  type ApprovalActionId,
+  type EvidenceItem
+} from "./data";
 
 const evidenceIcons: Record<EvidenceItem["kind"], ComponentType<{ size?: number }>> = {
   stdout: RadioTower,
@@ -31,8 +44,38 @@ const actionIcons: Record<ApprovalAction["impact"], ComponentType<{ size?: numbe
 
 function App() {
   const run = demoRun;
-  const completed = run.events.length;
-  const total = Object.keys(statusLabels).length;
+  const [pendingAction, setPendingAction] = useState<ApprovalActionId | undefined>();
+  const [approval, setApproval] = useState<ApprovalSubmission | undefined>();
+  const [approvalError, setApprovalError] = useState<string | undefined>();
+  const displayedStatus = approval?.resultStatus ?? run.status;
+  const displayedEvents = useMemo(
+    () => appendApprovalEvent(run.events, displayedStatus, approval),
+    [approval, displayedStatus, run.events]
+  );
+  const progressLabel = progressLabelFor(displayedStatus);
+  const latestQuarantine = run.quarantinedReports[0];
+
+  useEffect(() => {
+    setApproval(readApprovalSubmission(run.id));
+  }, [run.id]);
+
+  async function handleApproval(actionId: ApprovalActionId) {
+    setPendingAction(actionId);
+    setApprovalError(undefined);
+
+    try {
+      const result = await submitApprovalAction({
+        runId: run.id,
+        actionId,
+        patchHash: run.candidatePatch.hash
+      });
+      setApproval(result);
+    } catch (error) {
+      setApprovalError(error instanceof Error ? error.message : "Approval save failed");
+    } finally {
+      setPendingAction(undefined);
+    }
+  }
 
   return (
     <main className="shell">
@@ -60,20 +103,20 @@ function App() {
           <span>{run.currentBranch}</span>
           <span>{run.candidatePatch.hash}</span>
         </div>
-        <strong>{completed}/{total}</strong>
+        <strong>{progressLabel}</strong>
       </section>
 
       <div className="workspace">
         <aside className="timeline" aria-label="Run timeline">
           <div className="panel-head">
             <p className="eyebrow">Timeline</p>
-            <span className="status-pill active">{statusLabels[run.status]}</span>
+            <span className="status-pill active">{statusLabels[displayedStatus]}</span>
           </div>
           <ol>
-            {run.events.map((event, index) => (
-              <li key={event.id} className={index === run.events.length - 1 ? "current" : ""}>
+            {displayedEvents.map((event, index) => (
+              <li key={event.id} className={index === displayedEvents.length - 1 ? "current" : ""}>
                 <span className="timeline-dot">
-                  {index === run.events.length - 1 ? <CircleDot size={14} /> : <Check size={14} />}
+                  {index === displayedEvents.length - 1 ? <CircleDot size={14} /> : <Check size={14} />}
                 </span>
                 <div>
                   <time dateTime={event.at}>{formatTime(event.at)}</time>
@@ -146,13 +189,25 @@ function App() {
               ))}
             </ul>
 
+            <div className={`approval-state ${approvalError ? "error" : approval ? "saved" : "idle"}`} role="status">
+              {approvalError ?? approval?.message ?? "Awaiting maintainer decision"}
+            </div>
+
             <div className="approval-actions">
               {run.approvals.map((action) => {
                 const Icon = actionIcons[action.impact];
+                const isPending = pendingAction === action.id;
                 return (
-                  <button key={action.id} type="button" className={`action-button ${action.impact}`}>
+                  <button
+                    key={action.id}
+                    type="button"
+                    className={`action-button ${action.impact}`}
+                    disabled={pendingAction !== undefined}
+                    aria-busy={isPending}
+                    onClick={() => void handleApproval(action.id)}
+                  >
                     <Icon size={18} aria-hidden="true" />
-                    <span>{action.label}</span>
+                    <span>{isPending ? "Saving..." : action.label}</span>
                     <small>{action.description}</small>
                   </button>
                 );
@@ -171,19 +226,21 @@ function App() {
           </div>
           <div className="quarantine-state">
             <ShieldAlert size={24} aria-hidden="true" />
-            <strong>{run.security.findings.length} held</strong>
-            <span>Safe execution: {run.security.safeToExecute ? "yes" : "no"}</span>
+            <strong>{run.quarantinedReports.length} held</strong>
+            <span>Latest: issue #{latestQuarantine?.issueNumber ?? "-"}</span>
           </div>
-          {run.security.findings.map((finding) => (
-            <article className="finding" key={finding.ruleId}>
-              <div>
-                <span className={`severity ${finding.severity}`}>{finding.severity}</span>
-                <h3>{finding.ruleId}</h3>
-              </div>
-              <p>{finding.reason}</p>
-              <code>{finding.matchedText}</code>
-            </article>
-          ))}
+          {run.quarantinedReports.map((report) =>
+            report.security.findings.map((finding) => (
+              <article className="finding" key={`${report.id}:${finding.ruleId}`}>
+                <div>
+                  <span className={`severity ${finding.severity}`}>{finding.severity}</span>
+                  <h3>{report.title}</h3>
+                </div>
+                <p>{finding.reason}</p>
+                <code>{finding.matchedText}</code>
+              </article>
+            ))
+          )}
           <div className="last-seen">
             <Timer size={16} aria-hidden="true" />
             Verified {formatTime(run.candidatePatch.verifiedAt)}
@@ -203,3 +260,33 @@ function formatTime(value: string): string {
 }
 
 export default App;
+
+function appendApprovalEvent(
+  events: RunEvent[],
+  displayedStatus: RunStatus,
+  approval: ApprovalSubmission | undefined
+): RunEvent[] {
+  if (!approval) {
+    return events;
+  }
+
+  return [
+    ...events,
+    {
+      id: approval.id,
+      runId: approval.runId,
+      at: approval.savedAt,
+      status: displayedStatus,
+      message: approval.message
+    }
+  ];
+}
+
+function progressLabelFor(status: RunStatus): string {
+  const stageIndex = happyPathStatuses.indexOf(status);
+  if (stageIndex === -1) {
+    return "terminal branch";
+  }
+
+  return `stage ${stageIndex + 1}/${happyPathStatuses.length}`;
+}
