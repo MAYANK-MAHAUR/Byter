@@ -9,11 +9,12 @@
   },
   "packageManager": "pnpm@10.0.0",
   "scripts": {
-    "build": "pnpm -r build",
+    "build": "pnpm -r --workspace-concurrency=1 build",
+    "demo:e2e": "pnpm --filter @reprosmith/core build && pnpm --filter @reprosmith/repro-engine build && pnpm --filter @reprosmith/demo-runner build && pnpm --filter @reprosmith/demo-runner demo",
     "dev": "pnpm --filter @reprosmith/web dev",
-    "lint": "pnpm -r lint",
-    "test": "pnpm -r test",
-    "typecheck": "pnpm -r typecheck"
+    "lint": "pnpm -r --workspace-concurrency=1 lint",
+    "test": "pnpm -r --workspace-concurrency=1 test",
+    "typecheck": "pnpm -r --workspace-concurrency=1 typecheck"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

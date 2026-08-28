@@ -18,6 +18,22 @@ importers:
         specifier: ^2.1.1
         version: 2.1.9(@types/node@22.20.1)(lightningcss@1.33.0)
 
+  apps/demo-runner:
+    dependencies:
+      '@reprosmith/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@reprosmith/repro-engine':
+        specifier: workspace:*
+        version: link:../../packages/repro-engine
+    devDependencies:
+      typescript:
+        specifier: ^5.5.4
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.1
+        version: 2.1.9(@types/node@22.20.1)(lightningcss@1.33.0)
+
   apps/github-mcp:
     devDependencies:
       typescript:
