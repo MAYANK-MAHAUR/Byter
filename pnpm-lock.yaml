@@ -43,6 +43,28 @@ importers:
         specifier: ^2.1.1
         version: 2.1.9(@types/node@22.20.1)(lightningcss@1.33.0)
 
+  apps/server:
+    dependencies:
+      '@reprosmith/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@reprosmith/demo-runner':
+        specifier: workspace:*
+        version: link:../demo-runner
+      '@reprosmith/github':
+        specifier: workspace:*
+        version: link:../../packages/github
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      typescript:
+        specifier: ^5.5.4
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.1
+        version: 2.1.9(@types/node@22.20.1)(lightningcss@1.33.0)
+
   apps/web:
     dependencies:
       '@reprosmith/core':

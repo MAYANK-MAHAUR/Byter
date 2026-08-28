@@ -15,6 +15,7 @@
     "lint": "pnpm -r --workspace-concurrency=1 lint",
     "test": "pnpm -r --workspace-concurrency=1 test",
     "typecheck": "pnpm -r --workspace-concurrency=1 typecheck",
+    "start": "pnpm --filter @reprosmith/server start",
     "verify": "pnpm build && pnpm lint && pnpm typecheck && pnpm test && pnpm demo:e2e"
   },
   "devDependencies": {

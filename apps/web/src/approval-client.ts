@@ -19,7 +19,10 @@ export async function submitApprovalAction(input: {
 }): Promise<ApprovalSubmission> {
   const response = await fetch("/api/approvals", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...approvalAuthHeader()
+    },
     body: JSON.stringify(input)
   });
   if (!response.ok) {
@@ -29,6 +32,16 @@ export async function submitApprovalAction(input: {
   const submission = (await response.json()) as ApprovalSubmission;
   window.localStorage.setItem(`${storagePrefix}${input.runId}`, JSON.stringify(submission));
   return submission;
+}
+
+function approvalAuthHeader(): Record<string, string> {
+  const storedToken = window.localStorage.getItem("reprosmith:approval-token");
+  const token = storedToken ?? window.prompt("Approval token") ?? "";
+  if (token && !storedToken) {
+    window.localStorage.setItem("reprosmith:approval-token", token);
+  }
+
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 export function readApprovalSubmission(runId: string): ApprovalSubmission | undefined {

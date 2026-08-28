@@ -7,7 +7,8 @@ describe("GitHub MCP tools", () => {
       expect.objectContaining({ name: "read_issue", requiresApproval: false }),
       expect.objectContaining({ name: "read_file", requiresApproval: false }),
       expect.objectContaining({ name: "add_verified_label", requiresApproval: true }),
-      expect.objectContaining({ name: "comment_on_issue", requiresApproval: true })
+      expect.objectContaining({ name: "comment_on_issue", requiresApproval: true }),
+      expect.objectContaining({ name: "create_fix_pull_request", requiresApproval: true })
     ]);
   });
 
@@ -93,5 +94,89 @@ describe("GitHub MCP tools", () => {
     });
 
     expect(client.addLabels).toHaveBeenCalledWith("o", "r", 3, ["reprosmith:verified"]);
+  });
+
+  it("creates a draft fix pull request only with matching approval", async () => {
+    const client = {
+      getBranch: vi.fn().mockResolvedValue({ commit: { sha: "a".repeat(40) } }),
+      getCommit: vi.fn().mockResolvedValue({ tree: { sha: "b".repeat(40) } }),
+      createTree: vi.fn().mockResolvedValue({ sha: "c".repeat(40) }),
+      createCommit: vi.fn().mockResolvedValue({ sha: "d".repeat(40) }),
+      createBranch: vi.fn().mockResolvedValue(undefined),
+      deleteBranch: vi.fn().mockResolvedValue(undefined),
+      createPullRequest: vi.fn().mockResolvedValue({ number: 9, html_url: "https://github.test/pull/9" })
+    };
+    const tools = createGitHubMcpTools({ client: client as never });
+    const args = {
+      owner: "o",
+      repo: "r",
+      baseBranch: "main",
+      branchName: "reprosmith/fix-9",
+      title: "Fix parser crash",
+      body: "Verified by ReproSmith.",
+      files: [{ path: "src/parser.ts", content: "export const fixed = true;\n" }]
+    };
+
+    const result = await tools.callTool({
+      name: "create_fix_pull_request",
+      arguments: args,
+      approval: { approved: true, expectedPayloadHash: approvalPayloadHash("create_fix_pull_request", args) }
+    });
+
+    expect(client.getBranch).toHaveBeenCalledWith("o", "r", "main");
+    expect(client.getCommit).toHaveBeenCalledWith("o", "r", "a".repeat(40));
+    expect(client.createTree).toHaveBeenCalledWith(
+      "o",
+      "r",
+      expect.objectContaining({
+        baseTree: "b".repeat(40),
+        files: [{ path: "src/parser.ts", content: "export const fixed = true;\n" }]
+      })
+    );
+    expect(client.createCommit).toHaveBeenCalledWith(
+      "o",
+      "r",
+      expect.objectContaining({ tree: "c".repeat(40), parents: ["a".repeat(40)] })
+    );
+    expect(client.createBranch).toHaveBeenCalledWith("o", "r", "reprosmith/fix-9", "d".repeat(40));
+    expect(client.createPullRequest).toHaveBeenCalledWith(
+      "o",
+      "r",
+      expect.objectContaining({ draft: true, head: "reprosmith/fix-9" })
+    );
+    expect(client.deleteBranch).not.toHaveBeenCalled();
+    expect(result.content[0]?.text).toContain("https://github.test/pull/9");
+  });
+
+  it("deletes the fix branch when draft pull request creation fails", async () => {
+    const client = {
+      getBranch: vi.fn().mockResolvedValue({ commit: { sha: "a".repeat(40) } }),
+      getCommit: vi.fn().mockResolvedValue({ tree: { sha: "b".repeat(40) } }),
+      createTree: vi.fn().mockResolvedValue({ sha: "c".repeat(40) }),
+      createCommit: vi.fn().mockResolvedValue({ sha: "d".repeat(40) }),
+      createBranch: vi.fn().mockResolvedValue(undefined),
+      deleteBranch: vi.fn().mockResolvedValue(undefined),
+      createPullRequest: vi.fn().mockRejectedValue(new Error("pull request failed"))
+    };
+    const tools = createGitHubMcpTools({ client: client as never });
+    const args = {
+      owner: "o",
+      repo: "r",
+      baseBranch: "main",
+      branchName: "reprosmith/fix-9",
+      title: "Fix parser crash",
+      body: "Verified by ReproSmith.",
+      files: [{ path: "src/parser.ts", content: "export const fixed = true;\n" }]
+    };
+
+    await expect(
+      tools.callTool({
+        name: "create_fix_pull_request",
+        arguments: args,
+        approval: { approved: true, expectedPayloadHash: approvalPayloadHash("create_fix_pull_request", args) }
+      })
+    ).rejects.toThrow("pull request failed");
+
+    expect(client.deleteBranch).toHaveBeenCalledWith("o", "r", "reprosmith/fix-9");
   });
 });

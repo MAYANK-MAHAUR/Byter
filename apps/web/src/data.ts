@@ -175,6 +175,7 @@ export const statusLabels: Record<RunStatus, string> = {
   rejected: "Rejected",
   triaging: "Triaging",
   "needs-info": "Needs info",
+  failed: "Failed",
   "environment-building": "Environment",
   "environment-failed": "Environment failed",
   reproducing: "Reproducing",

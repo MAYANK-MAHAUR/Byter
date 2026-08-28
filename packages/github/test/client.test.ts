@@ -53,4 +53,104 @@ describe("GitHubRestClient", () => {
     );
     await expect(client.getFile("owner", "repo", "/src/token.ts")).rejects.toThrow("Invalid GitHub repository path");
   });
+
+  it("creates a fix tree commit, branch, and draft pull request", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), init: init ?? {} });
+      if (String(url).endsWith("/branches/main")) {
+        return new Response(JSON.stringify({ name: "main", commit: { sha: "a".repeat(40) } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+
+      if (String(url).endsWith(`/git/commits/${"a".repeat(40)}`)) {
+        return new Response(JSON.stringify({ sha: "a".repeat(40), tree: { sha: "b".repeat(40) } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+
+      if (String(url).endsWith("/git/trees")) {
+        return new Response(JSON.stringify({ sha: "c".repeat(40) }), {
+          status: 201,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+
+      if (String(url).endsWith("/git/commits")) {
+        return new Response(JSON.stringify({ sha: "d".repeat(40), tree: { sha: "c".repeat(40) } }), {
+          status: 201,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+
+      if (String(url).endsWith("/pulls")) {
+        return new Response(JSON.stringify({ number: 12, html_url: "https://github.test/pull/12" }), {
+          status: 201,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+
+      return new Response("{}", { status: 201, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+
+    const client = new GitHubRestClient({ token: "token", apiBaseUrl: "https://api.github.test", fetchImpl });
+    const branch = await client.getBranch("owner", "repo", "main");
+    const baseCommit = await client.getCommit("owner", "repo", branch.commit.sha);
+    const tree = await client.createTree("owner", "repo", {
+      baseTree: baseCommit.tree.sha,
+      files: [{ path: "src/tokenizer.ts", content: "export const fixed = true;\n" }]
+    });
+    const commit = await client.createCommit("owner", "repo", {
+      message: "ReproSmith fix: trailing escape",
+      tree: tree.sha,
+      parents: [branch.commit.sha]
+    });
+    await client.createBranch("owner", "repo", "reprosmith/fix-17", commit.sha);
+    const pullRequest = await client.createPullRequest("owner", "repo", {
+      title: "Fix trailing escape",
+      body: "Verified by ReproSmith.",
+      head: "reprosmith/fix-17",
+      base: "main"
+    });
+
+    expect(calls.map((call) => call.url)).toEqual([
+      "https://api.github.test/repos/owner/repo/branches/main",
+      `https://api.github.test/repos/owner/repo/git/commits/${"a".repeat(40)}`,
+      "https://api.github.test/repos/owner/repo/git/trees",
+      "https://api.github.test/repos/owner/repo/git/commits",
+      "https://api.github.test/repos/owner/repo/git/refs",
+      "https://api.github.test/repos/owner/repo/pulls"
+    ]);
+    expect(JSON.parse(calls[2]?.init.body as string)).toMatchObject({
+      base_tree: "b".repeat(40),
+      tree: [{ path: "src/tokenizer.ts", content: "export const fixed = true;\n" }]
+    });
+    expect(JSON.parse(calls[3]?.init.body as string)).toMatchObject({
+      tree: "c".repeat(40),
+      parents: ["a".repeat(40)]
+    });
+    expect(JSON.parse(calls[4]?.init.body as string)).toMatchObject({
+      ref: "refs/heads/reprosmith/fix-17",
+      sha: "d".repeat(40)
+    });
+    expect(JSON.parse(calls[5]?.init.body as string)).toMatchObject({ draft: true });
+    expect(pullRequest.html_url).toBe("https://github.test/pull/12");
+  });
+
+  it("deletes created branches through the refs API", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), init: init ?? {} });
+      return new Response(null, { status: 204 });
+    }) as typeof fetch;
+    const client = new GitHubRestClient({ token: "token", apiBaseUrl: "https://api.github.test", fetchImpl });
+
+    await client.deleteBranch("owner", "repo", "reprosmith/fix-17");
+
+    expect(calls[0]?.url).toBe("https://api.github.test/repos/owner/repo/git/refs/heads/reprosmith/fix-17");
+    expect(calls[0]?.init.method).toBe("DELETE");
+  });
 });
