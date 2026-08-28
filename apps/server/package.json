@@ -19,6 +19,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@reprosmith/agent": "workspace:*",
     "@reprosmith/core": "workspace:*",
     "@reprosmith/github": "workspace:*",
     "@reprosmith/demo-runner": "workspace:*"

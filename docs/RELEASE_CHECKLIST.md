@@ -11,6 +11,7 @@
 - Signed GitHub issues webhook route
 - Authenticated approval receipt persistence with current-run validation
 - Delivery deduplication for GitHub webhooks
+- Optional webhook-to-TrueForge session handoff path, tested with an injected runtime
 - Bounded API request bodies
 - Demo endpoint single-flight/cached execution
 - Approval-gated GitHub MCP write tools
@@ -25,7 +26,7 @@
 - Verify `/healthz`, `/api/demo-run`, and dashboard route on the Railway URL.
 - Configure the GitHub App webhook URL to `/api/github/webhook`.
 - Run one real signed GitHub issue webhook through the deployed server.
-- Start one live TrueForge session from a real issue.
+- Confirm the deployed webhook response includes a started TrueForge session and turn.
 - Verify the deployed TrueForge fork sends AgentRouter's Cline-compatible `User-Agent` header.
 - Verify Daytona sandbox creation if Daytona is part of the demo path.
 - Approve one payload-specific GitHub MCP write and confirm a draft PR appears.

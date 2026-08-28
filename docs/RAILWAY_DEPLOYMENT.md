@@ -57,6 +57,17 @@ https://<railway-domain>/api/github/webhook
 
 Subscribe to GitHub `issues` events.
 
+After setting `TRUEFORGE_URL` and `TRUEFORGE_API_KEY`, send one signed test issue delivery to `/api/github/webhook` and confirm the JSON response includes:
+
+```json
+{
+  "run": { "status": "environment-building" },
+  "trueForge": { "status": "started" }
+}
+```
+
+If `trueForge.status` is `not-configured`, the server accepted and persisted the webhook but did not start live orchestration.
+
 ## Known Limits
 
 The production server currently persists approval and webhook records as JSONL files under `DATA_DIR`. Use a mounted volume for demos. For longer-running production, replace this with Postgres or another durable store.
