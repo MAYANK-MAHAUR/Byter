@@ -17,11 +17,26 @@ describe("failure fingerprints", () => {
     expect(fingerprint).toMatchObject({
       errorType: "TypeError",
       message: "Cannot read properties of undefined",
-      file: "C:\\repo\\src\\tokenizer.ts",
+      file: "C:/repo/src/tokenizer.ts",
       line: 42,
       column: 9,
       stackFrame: "tokenize"
     });
+  });
+
+  it("preserves leading slash from Linux file URL stack locations", () => {
+    const fingerprint = extractFailureFingerprint({
+      command: "node",
+      args: [],
+      cwd: process.cwd(),
+      exitCode: 1,
+      timedOut: false,
+      durationMs: 1,
+      stdout: "",
+      stderr: "TypeError: Cannot read properties of undefined\n    at parse (file:///tmp/reprosmith/parser.js:3:11)"
+    });
+
+    expect(fingerprint.file).toBe("/tmp/reprosmith/parser.js");
   });
 
   it("does not match different source lines", () => {

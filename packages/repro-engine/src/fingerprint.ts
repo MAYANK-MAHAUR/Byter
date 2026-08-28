@@ -68,14 +68,14 @@ function extractStackLocation(output: string): Partial<FailureFingerprint> {
     return {};
   }
 
-  const match = stackLine.match(/at\s+(?:async\s+)?(?:(.+?)\s+\()?(?:file:\/\/\/)?(.+):(\d+):(\d+)\)?$/);
+  const match = stackLine.match(/at\s+(?:async\s+)?(?:(.+?)\s+\()?((?:file:\/\/\/)?.+):(\d+):(\d+)\)?$/);
   if (!match) {
     return {};
   }
 
   return {
     stackFrame: match[1]?.trim(),
-    file: match[2]?.trim(),
+    file: normalizePath(match[2]?.trim() ?? ""),
     line: Number.parseInt(match[3] ?? "", 10),
     column: Number.parseInt(match[4] ?? "", 10)
   };
@@ -86,5 +86,13 @@ function normalizeMessage(message: string): string {
 }
 
 function normalizePath(path: string): string {
-  return path.replace(/\\/g, "/").replace(/^file:\/\/\//, "");
+  let normalized = path.replace(/\\/g, "/");
+  if (normalized.startsWith("file:///")) {
+    normalized = normalized.slice("file://".length);
+    if (/^\/[A-Za-z]:\//.test(normalized)) {
+      normalized = normalized.slice(1);
+    }
+  }
+
+  return normalized;
 }

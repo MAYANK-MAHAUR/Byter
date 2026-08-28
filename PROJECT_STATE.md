@@ -9,6 +9,8 @@
 - [x] TrueForge runtime adapter contract and startup failure handling.
 - [x] Reproduction runner, fingerprinting, verifier, minimizer, and patch validator.
 - [x] Vite dashboard console with run timeline, evidence, approval, and security views.
+- [x] Pull-request CI workflow added.
+- [x] Cross-platform stack file URL normalization verified for reproduction fingerprints.
 
 ## In Progress
 
@@ -29,19 +31,21 @@
 
 2026-08-28
 
-Commands run against `origin/main` in clean worktree `D:\keen-hertz-origin-main`:
+Commands run against `docs/status-and-ci` in clean worktree `D:\keen-hertz-origin-main`:
 
 - `pnpm install --frozen-lockfile`
 - `pnpm lint`
 - `pnpm typecheck`
 - `pnpm test`
 - `pnpm build`
-- `git grep -n "BEGIN.*PRIVATE KEY\|github_pat_\|ghp_\|sk-" HEAD -- . ':!pnpm-lock.yaml' ':!package-lock.json'`
+- `pnpm --filter @reprosmith/repro-engine test`
+- Tracked secret pattern scan for private keys, GitHub tokens, and model API keys.
 
 Result:
 
-- Install, lint, typecheck, test, and build passed.
+- Install, lint, typecheck, test, package-level reproduction-engine tests, and build passed locally.
 - Secret pattern scan found no tracked matches.
+- GitHub Actions initially exposed a Linux-only stack path normalization failure on PR #7; the branch now includes a fix and regression test.
 
 Commit:
 
