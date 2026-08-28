@@ -14,9 +14,9 @@
   "scripts": {
     "build": "tsc -b tsconfig.json",
     "demo": "node dist/cli.js",
-    "lint": "tsc -p tsconfig.json --noEmit",
+    "lint": "tsc -b tsconfig.json --pretty false",
     "test": "vitest run --config vitest.config.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -b tsconfig.json --pretty false"
   },
   "dependencies": {
     "@reprosmith/core": "workspace:*",
