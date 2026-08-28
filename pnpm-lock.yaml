@@ -48,6 +48,9 @@ importers:
       '@reprosmith/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@reprosmith/demo-runner':
+        specifier: workspace:*
+        version: link:../demo-runner
       lucide-react:
         specifier: ^1.34.0
         version: 1.34.0(react@19.2.8)

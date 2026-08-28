@@ -8,7 +8,8 @@
     "moduleResolution": "Bundler",
     "noEmit": true,
     "paths": {
-      "@reprosmith/core": ["../../packages/core/src/index.js"]
+      "@reprosmith/core": ["../../packages/core/src/index.js"],
+      "@reprosmith/demo-runner": ["../../apps/demo-runner/src/index.ts"]
     },
     "sourceMap": false,
     "types": ["vite/client"]

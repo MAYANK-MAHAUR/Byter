@@ -64,6 +64,11 @@ Open the Vite URL printed by the command, usually `http://127.0.0.1:5173`.
 
 The dashboard is a local console for the same proof path: timeline, reproduction evidence, patch validation, approval payload hash, and quarantine findings.
 
+In development, the dashboard calls the local Vite API:
+
+- `GET /api/demo-run` executes the demo runner and returns freshly generated proof data.
+- `POST /api/approvals` records the selected approval action without mutating GitHub.
+
 ## Environment
 
 Copy `.env.example` to `.env.local` for local secrets:

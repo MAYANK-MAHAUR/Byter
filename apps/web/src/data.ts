@@ -1,4 +1,5 @@
 import type { ReproRun, RunStatus, SecurityScanResult } from "@reprosmith/core";
+import type { DemoRunSummary } from "@reprosmith/demo-runner";
 
 export type EvidenceKind = "stdout" | "stack" | "patch" | "policy";
 export type ApprovalActionId = "approve-pr" | "request-diff" | "reject-run";
@@ -27,6 +28,7 @@ export interface QuarantinedReport {
 }
 
 export interface DashboardRun extends ReproRun {
+  generatedAt: string;
   repoLabel: string;
   issueTitle: string;
   assignee: string;
@@ -45,131 +47,111 @@ export interface DashboardRun extends ReproRun {
   quarantinedReports: QuarantinedReport[];
 }
 
-const issue = {
-  owner: "MAYANK-MAHAUR",
-  repo: "Byter",
-  issueNumber: 17,
-  url: "https://github.com/MAYANK-MAHAUR/Byter/issues/17",
-  baseSha: "814cf16"
-};
+export async function fetchDashboardRun(fetchImpl: typeof fetch = fetch): Promise<DashboardRun> {
+  const response = await fetchImpl("/api/demo-run", { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`Run API returned ${response.status}`);
+  }
 
-const events: DashboardRun["events"] = [
-  event("run-5:received", "received", "GitHub issue received", "2026-08-27T16:54:20.000Z"),
-  event("run-5:security", "security-review", "Issue body passed command-risk scan", "2026-08-27T16:54:34.000Z", {
-    findings: 0
-  }),
-  event("run-5:triaging", "triaging", "Agent extracted parser crash scenario", "2026-08-27T16:55:12.000Z"),
-  event("run-5:environment", "environment-building", "Workspace copied with dependency cache intact", "2026-08-27T16:56:01.000Z"),
-  event("run-5:reproducing", "reproducing", "Reproducer executed across 3 attempts", "2026-08-27T16:56:48.000Z", {
-    attempts: 3
-  }),
-  event("run-5:verified", "verified", "Same TypeError fingerprint verified", "2026-08-27T16:57:23.000Z", {
-    errorType: "TypeError",
-    file: "parser.js:3"
-  }),
-  event("run-5:minimizing", "minimizing", "Input reduced to a single escape token", "2026-08-27T16:58:10.000Z"),
-  event("run-5:fixing", "fixing", "Candidate replacement prepared", "2026-08-27T16:59:52.000Z"),
-  event("run-5:validating", "validating", "Patch validation ran in disposable workspace", "2026-08-27T17:02:18.000Z"),
-  event("run-5:ready", "patch-ready", "Before failed, after passed, regressions passed", "2026-08-27T17:03:42.000Z"),
-  event("run-5:approval", "awaiting-approval", "GitHub write approval is required", "2026-08-27T17:04:05.000Z")
-];
+  return toDashboardRun((await response.json()) as DemoRunSummary);
+}
 
-export const demoRun: DashboardRun = {
-  id: "run-5",
-  issue,
-  repoLabel: "MAYANK-MAHAUR / Byter",
-  issueTitle: "Tokenizer crashes on escaped slash input",
-  assignee: "ReproSmith agent",
-  runtime: "TrueForge Agent Harness",
-  model: "AgentRouter glm-5.3",
-  currentBranch: "feat/patch-validation",
-  status: "awaiting-approval",
-  createdAt: events[0]?.at ?? "2026-08-27T16:54:20.000Z",
-  updatedAt: events.at(-1)?.at ?? "2026-08-27T17:04:05.000Z",
-  events,
-  candidatePatch: {
-    title: "Harden patch validation workspace boundaries",
-    files: ["packages/repro-engine/src/patch-validator.ts", "packages/repro-engine/src/types.ts"],
-    hash: "9127d64",
-    verifiedAt: "2026-08-27T17:18:10.000Z"
-  },
-  evidence: [
-    {
-      id: "ev-1",
-      kind: "stack",
-      title: "Failure fingerprint",
-      value: "TypeError / parser.js:3",
-      detail: "Matched across 3 consecutive runs",
-      status: "verified"
-    },
-    {
-      id: "ev-2",
-      kind: "stdout",
-      title: "Runner result",
-      value: "exit 0 after patch",
-      detail: "No timeout or output-limit flags",
-      status: "verified"
-    },
-    {
-      id: "ev-3",
-      kind: "patch",
-      title: "Files changed",
-      value: "2 source files",
-      detail: "Protected reproducer path untouched",
-      status: "verified"
-    },
-    {
-      id: "ev-4",
-      kind: "policy",
-      title: "Security scan",
-      value: "0 findings",
-      detail: "Run cleared for sandbox execution",
-      status: "verified"
-    }
-  ],
-  approvals: [
-    {
-      id: "approve-pr",
-      label: "Approve PR write",
-      description: "Create the verified fix PR with a payload-specific approval hash.",
-      impact: "safe"
-    },
-    {
-      id: "request-diff",
-      label: "Request diff review",
-      description: "Hold the write and send evidence to the maintainer queue.",
-      impact: "review"
-    },
-    {
-      id: "reject-run",
-      label: "Reject run",
-      description: "Close the run without mutating GitHub state.",
-      impact: "blocked"
-    }
-  ],
-  security: {
-    safeToExecute: true,
-    findings: []
-  },
-  quarantinedReports: [
-    {
-      id: "held-22",
-      issueNumber: 22,
-      title: "Run the repro from a pasted installer command",
-      security: {
-        safeToExecute: false,
-        findings: [
+export function toDashboardRun(summary: DemoRunSummary): DashboardRun {
+  const expected = summary.validation.before.expected;
+  const matchedAttempts = summary.validation.before.attempts.filter((attempt) => attempt.matchedExpected).length;
+  const totalAttempts = summary.validation.before.attempts.length;
+  const afterPassed = commandPassed(summary.validation.after);
+  const regressionsPassed = summary.validation.regressions ? commandPassed(summary.validation.regressions) : undefined;
+
+  return {
+    ...summary.run,
+    generatedAt: summary.generatedAt,
+    repoLabel: summary.repository.replace("/", " / "),
+    issueTitle: summary.issueTitle,
+    assignee: "ReproSmith agent",
+    runtime: summary.runtime,
+    model: summary.model,
+    currentBranch: summary.currentBranch,
+    candidatePatch: summary.candidatePatch,
+    evidence: [
+      {
+        id: "failure-fingerprint",
+        kind: "stack",
+        title: "Failure fingerprint",
+        value: formatFailure(expected),
+        detail: `${matchedAttempts}/${totalAttempts} attempts matched`,
+        status: summary.validation.before.status === "verified" ? "verified" : "warning"
+      },
+      {
+        id: "runner-result",
+        kind: "stdout",
+        title: "Runner result",
+        value: `exit ${summary.validation.after.exitCode ?? "not run"} after patch`,
+        detail: afterPassed ? "No timeout or output-limit flags" : summary.validation.reason ?? "Patch proof failed",
+        status: afterPassed ? "verified" : "blocked"
+      },
+      {
+        id: "patch-files",
+        kind: "patch",
+        title: "Files changed",
+        value: pluralize(summary.validation.filesChanged.length, "file"),
+        detail: summary.validation.filesChanged.join(", ") || "No files changed",
+        status: summary.validation.status === "patch-ready" ? "verified" : "warning"
+      },
+      {
+        id: "security-scan",
+        kind: "policy",
+        title: "Security scan",
+        value: pluralize(summary.safeIssueScan.findings.length, "finding"),
+        detail: summary.safeIssueScan.safeToExecute ? "Run cleared for sandbox execution" : "Run blocked before execution",
+        status: summary.safeIssueScan.safeToExecute ? "verified" : "blocked"
+      },
+      {
+        id: "regression-proof",
+        kind: "stdout",
+        title: "Regression proof",
+        value: regressionsPassed === undefined ? "not configured" : regressionsPassed ? "passed" : "failed",
+        detail: summary.validation.regressions
+          ? `exit ${summary.validation.regressions.exitCode ?? "not run"}`
+          : "No regression command returned",
+        status: regressionsPassed === false ? "blocked" : "verified"
+      }
+    ],
+    approvals: approvalActions,
+    security: summary.safeIssueScan,
+    quarantinedReports: summary.quarantinedIssueScan.findings.length
+      ? [
           {
-            ruleId: "credential-exfiltration",
-            severity: "critical",
-            reason: "Issue text asks the agent to reveal or export credentials.",
-            matchedText: "show env token"
+            id: "held-demo-input",
+            issueNumber: summary.run.issue.issueNumber,
+            title: "Quarantined issue instruction",
+            security: summary.quarantinedIssueScan
           }
         ]
-      }
-    }
-  ]
-};
+      : []
+  };
+}
+
+export const approvalActions: ApprovalAction[] = [
+  {
+    id: "approve-pr",
+    label: "Approve PR write",
+    description: "Create the verified fix PR with a payload-specific approval hash.",
+    impact: "safe"
+  },
+  {
+    id: "request-diff",
+    label: "Request diff review",
+    description: "Hold the write and send evidence to the maintainer queue.",
+    impact: "review"
+  },
+  {
+    id: "reject-run",
+    label: "Reject run",
+    description: "Close the run without mutating GitHub state.",
+    impact: "blocked"
+  }
+];
 
 export const happyPathStatuses: RunStatus[] = [
   "received",
@@ -209,19 +191,19 @@ export const statusLabels: Record<RunStatus, string> = {
   "pr-created": "PR created"
 };
 
-function event(
-  id: string,
-  status: RunStatus,
-  message: string,
-  at: string,
-  evidence?: Record<string, unknown>
-): DashboardRun["events"][number] {
-  return {
-    id,
-    runId: "run-5",
-    status,
-    message,
-    at,
-    ...(evidence ? { evidence } : {})
-  };
+function commandPassed(result: { exitCode: number | null; timedOut: boolean; outputLimitExceeded: boolean }): boolean {
+  return result.exitCode === 0 && !result.timedOut && !result.outputLimitExceeded;
+}
+
+function formatFailure(failure: { errorType: string; file?: string; line?: number }): string {
+  const location = failure.file ? `${shortPath(failure.file)}${failure.line ? `:${failure.line}` : ""}` : undefined;
+  return [failure.errorType, location].filter(Boolean).join(" / ");
+}
+
+function shortPath(path: string): string {
+  return path.replace(/\\/g, "/").split("/").at(-1) ?? path;
+}
+
+function pluralize(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }

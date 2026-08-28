@@ -17,17 +17,16 @@ export async function submitApprovalAction(input: {
   actionId: ApprovalActionId;
   patchHash: string;
 }): Promise<ApprovalSubmission> {
-  await new Promise((resolve) => setTimeout(resolve, 240));
+  const response = await fetch("/api/approvals", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+  if (!response.ok) {
+    throw new Error(`Approval API returned ${response.status}`);
+  }
 
-  const submission: ApprovalSubmission = {
-    id: `${input.runId}:${input.actionId}:${input.patchHash}`,
-    runId: input.runId,
-    actionId: input.actionId,
-    resultStatus: resultStatusFor(input.actionId),
-    message: messageFor(input.actionId),
-    savedAt: new Date().toISOString()
-  };
-
+  const submission = (await response.json()) as ApprovalSubmission;
   window.localStorage.setItem(`${storagePrefix}${input.runId}`, JSON.stringify(submission));
   return submission;
 }
@@ -44,28 +43,4 @@ export function readApprovalSubmission(runId: string): ApprovalSubmission | unde
     window.localStorage.removeItem(`${storagePrefix}${runId}`);
     return undefined;
   }
-}
-
-function resultStatusFor(actionId: ApprovalActionId): RunStatus {
-  if (actionId === "approve-pr") {
-    return "approved";
-  }
-
-  if (actionId === "reject-run") {
-    return "rejected";
-  }
-
-  return "awaiting-approval";
-}
-
-function messageFor(actionId: ApprovalActionId): string {
-  if (actionId === "approve-pr") {
-    return "PR write approval saved";
-  }
-
-  if (actionId === "reject-run") {
-    return "Run rejection saved";
-  }
-
-  return "Diff review request saved";
 }
