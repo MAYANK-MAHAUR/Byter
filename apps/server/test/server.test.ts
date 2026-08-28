@@ -132,13 +132,17 @@ describe("ReproSmith production server", () => {
       "X-Hub-Signature-256": signWebhookPayload(payload, "webhook-secret")
     };
 
-    const first = await fetch(`${baseUrl}/api/github/webhook`, { method: "POST", headers, body: payload });
-    const second = await fetch(`${baseUrl}/api/github/webhook`, { method: "POST", headers, body: payload });
-    const duplicate = await second.json();
+    const responses = await Promise.all([
+      fetch(`${baseUrl}/api/github/webhook`, { method: "POST", headers, body: payload }),
+      fetch(`${baseUrl}/api/github/webhook`, { method: "POST", headers, body: payload })
+    ]);
+    const bodies = await Promise.all(responses.map((response) => response.json()));
+    const persistedRuns = (await readFile(join(dataDir, "webhook-runs.jsonl"), "utf8")).trim().split("\n");
 
-    expect(first.status).toBe(202);
-    expect(second.status).toBe(202);
-    expect(duplicate).toEqual({ ignored: true, reason: "Duplicate GitHub delivery" });
+    expect(responses.map((response) => response.status)).toEqual([202, 202]);
+    expect(bodies.filter((body) => body.ignored === true)).toHaveLength(1);
+    expect(bodies.filter((body) => body.run?.id === "github-o-r-18")).toHaveLength(1);
+    expect(persistedRuns).toHaveLength(1);
   });
 
   it("rejects GitHub webhooks with invalid signatures", async () => {
@@ -170,6 +174,7 @@ describe("ReproSmith production server", () => {
     });
 
     expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid GitHub webhook payload" });
   });
 
   it("requires DATA_DIR before accepting persistent write endpoints", async () => {
@@ -232,7 +237,9 @@ describe("ReproSmith production server", () => {
     });
 
     expect(malformed.status).toBe(400);
+    await expect(malformed.json()).resolves.toEqual({ error: "Invalid JSON payload" });
     expect(oversized.status).toBe(413);
+    await expect(oversized.json()).resolves.toEqual({ error: "Request body too large" });
   });
 
   it("serves the default built web directory from the package working directory", async () => {

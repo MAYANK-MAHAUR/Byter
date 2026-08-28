@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { appendFile, mkdir, readFile, stat } from "node:fs/promises";
+import { appendFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -89,12 +89,11 @@ async function handleGitHubWebhook(
   }
 
   const deliveryId = headerValue(request, "x-github-delivery");
-  if (!deliveryId) {
-    sendJson(response, 400, { error: "X-GitHub-Delivery is required" });
-    return;
+  if (!isValidDeliveryId(deliveryId)) {
+    throw new HttpError(400, "Invalid GitHub webhook headers");
   }
 
-  if (dataDir && (await deliveryWasProcessed(dataDir, deliveryId))) {
+  if (!(await claimDelivery(dataDir, deliveryId))) {
     sendJson(response, 202, { ignored: true, reason: "Duplicate GitHub delivery" });
     return;
   }
@@ -109,7 +108,7 @@ async function handleGitHubWebhook(
   try {
     webhook = parseIssueWebhook(payload);
   } catch {
-    throw new HttpError(400, "Malformed GitHub issues webhook payload");
+    throw new HttpError(400, "Invalid GitHub webhook payload");
   }
   if (!["opened", "edited", "reopened"].includes(webhook.action)) {
     sendJson(response, 202, { ignored: true, reason: `Unsupported issue action: ${webhook.action}` });
@@ -242,23 +241,37 @@ async function readJson(request: IncomingMessage): Promise<Record<string, unknow
   try {
     parsed = JSON.parse(raw) as unknown;
   } catch {
-    throw new HttpError(400, "Malformed JSON payload");
+    throw new HttpError(400, "Invalid JSON payload");
   }
 
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new HttpError(400, "Expected object payload");
+    throw new HttpError(400, "Invalid request payload");
   }
 
   return parsed as Record<string, unknown>;
 }
 
 async function readText(request: IncomingMessage): Promise<string> {
+  const contentLength = headerValue(request, "content-length");
+  if (contentLength) {
+    const declaredBytes = Number(contentLength);
+    if (!Number.isSafeInteger(declaredBytes) || declaredBytes < 0) {
+      throw new HttpError(400, "Invalid request headers");
+    }
+
+    if (declaredBytes > maxRequestBodyBytes) {
+      throw new HttpError(413, "Request body too large");
+    }
+  }
+
   const chunks: Buffer[] = [];
   let bytes = 0;
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     bytes += buffer.byteLength;
     if (bytes > maxRequestBodyBytes) {
+      chunks.length = 0;
+      request.destroy();
       throw new HttpError(413, "Request body too large");
     }
 
@@ -296,7 +309,7 @@ function isInside(root: string, target: string): boolean {
 
 function expectString(value: unknown, name: string): string {
   if (typeof value !== "string" || value.length === 0) {
-    throw new HttpError(400, `Expected non-empty string: ${name}`);
+    throw new HttpError(400, "Invalid request payload");
   }
 
   return value;
@@ -307,25 +320,35 @@ function expectApprovalAction(value: unknown): ApprovalActionId {
     return value;
   }
 
-  throw new HttpError(400, "Expected valid approval action");
+  throw new HttpError(400, "Invalid request payload");
 }
 
-async function deliveryWasProcessed(dataDir: string, deliveryId: string): Promise<boolean> {
+async function claimDelivery(dataDir: string, deliveryId: string): Promise<boolean> {
+  const deliveryDir = join(dataDir, "webhook-deliveries");
+  await mkdir(deliveryDir, { recursive: true });
+
   try {
-    const records = await readFile(join(dataDir, "webhook-runs.jsonl"), "utf8");
-    return records
-      .split("\n")
-      .filter(Boolean)
-      .some((line) => {
-        try {
-          return (JSON.parse(line) as { deliveryId?: string }).deliveryId === deliveryId;
-        } catch {
-          return false;
-        }
-      });
-  } catch {
+    await writeFile(
+      join(deliveryDir, `${createHash("sha256").update(deliveryId).digest("hex")}.json`),
+      `${JSON.stringify({ deliveryId, claimedAt: new Date().toISOString() })}\n`,
+      { encoding: "utf8", flag: "wx" }
+    );
+    return true;
+  } catch (error) {
+    if (!isFileAlreadyExistsError(error)) {
+      throw error;
+    }
+
     return false;
   }
+}
+
+function isValidDeliveryId(value: string | undefined): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9-]{1,100}$/.test(value);
+}
+
+function isFileAlreadyExistsError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST";
 }
 
 function bearerToken(request: IncomingMessage): string | undefined {
