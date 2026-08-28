@@ -16,6 +16,31 @@ export interface GitHubRestClientLike {
   }>;
   addLabels(owner: string, repo: string, issueNumber: number, labels: string[]): Promise<void>;
   createIssueComment(owner: string, repo: string, issueNumber: number, body: string): Promise<{ html_url: string }>;
+  getBranch(owner: string, repo: string, branch: string): Promise<{ commit: { sha: string } }>;
+  createBranch(owner: string, repo: string, branch: string, sha: string): Promise<void>;
+  deleteBranch(owner: string, repo: string, branch: string): Promise<void>;
+  getCommit(owner: string, repo: string, sha: string): Promise<{ tree: { sha: string } }>;
+  createTree(
+    owner: string,
+    repo: string,
+    input: { baseTree: string; files: Array<{ path: string; content: string }> }
+  ): Promise<{ sha: string }>;
+  createCommit(
+    owner: string,
+    repo: string,
+    input: { message: string; tree: string; parents: string[] }
+  ): Promise<{ sha: string }>;
+  createOrUpdateFile(
+    owner: string,
+    repo: string,
+    path: string,
+    input: { branch: string; message: string; content: string; sha?: string }
+  ): Promise<void>;
+  createPullRequest(
+    owner: string,
+    repo: string,
+    input: { title: string; body: string; head: string; base: string; draft?: boolean }
+  ): Promise<{ number: number; html_url: string }>;
 }
 
 export interface ApprovalContext {
@@ -23,8 +48,16 @@ export interface ApprovalContext {
   expectedPayloadHash?: string;
 }
 
-export type GitHubMcpToolName = "read_issue" | "read_file" | "add_verified_label" | "comment_on_issue";
-export type GitHubMcpWriteToolName = Extract<GitHubMcpToolName, "add_verified_label" | "comment_on_issue">;
+export type GitHubMcpToolName =
+  | "read_issue"
+  | "read_file"
+  | "add_verified_label"
+  | "comment_on_issue"
+  | "create_fix_pull_request";
+export type GitHubMcpWriteToolName = Extract<
+  GitHubMcpToolName,
+  "add_verified_label" | "comment_on_issue" | "create_fix_pull_request"
+>;
 
 export interface GitHubMcpToolCall {
   name: GitHubMcpToolName;
@@ -45,7 +78,12 @@ export function listGitHubTools(): Array<{ name: GitHubMcpToolName; description:
     { name: "read_issue", description: "Read a GitHub issue by owner, repo, and number.", requiresApproval: false },
     { name: "read_file", description: "Read a repository file at an optional ref.", requiresApproval: false },
     { name: "add_verified_label", description: "Add reprosmith:verified after proof is complete.", requiresApproval: true },
-    { name: "comment_on_issue", description: "Post a ReproSmith evidence comment.", requiresApproval: true }
+    { name: "comment_on_issue", description: "Post a ReproSmith evidence comment.", requiresApproval: true },
+    {
+      name: "create_fix_pull_request",
+      description: "Create a fix branch with explicit file contents and open a draft pull request.",
+      requiresApproval: true
+    }
   ];
 }
 
@@ -90,6 +128,50 @@ export function createGitHubMcpTools({ client }: GitHubMcpServerOptions) {
           const body = expectString(call.arguments.body, "body");
           const comment = await client.createIssueComment(owner, repo, issueNumber, body);
           return textResult(`Created comment: ${comment.html_url}`);
+        }
+
+        case "create_fix_pull_request": {
+          assertApproved(call.approval, approvalPayloadHash(call.name, call.arguments));
+          const request = parseCreatePullRequestArgs(call.arguments);
+          const base = await client.getBranch(request.owner, request.repo, request.baseBranch);
+          const baseCommit = await client.getCommit(request.owner, request.repo, base.commit.sha);
+          const tree = await client.createTree(request.owner, request.repo, {
+            baseTree: baseCommit.tree.sha,
+            files: request.files.map((file) => ({ path: file.path, content: file.content }))
+          });
+          const commit = await client.createCommit(request.owner, request.repo, {
+            message: `ReproSmith fix: ${request.title}`,
+            tree: tree.sha,
+            parents: [base.commit.sha]
+          });
+          await client.createBranch(request.owner, request.repo, request.branchName, commit.sha);
+
+          let pullRequest: { number: number; html_url: string };
+          try {
+            pullRequest = await client.createPullRequest(request.owner, request.repo, {
+              title: request.title,
+              body: request.body,
+              head: request.branchName,
+              base: request.baseBranch,
+              draft: true
+            });
+          } catch (error) {
+            await client.deleteBranch(request.owner, request.repo, request.branchName);
+            throw error;
+          }
+
+          return textResult(
+            JSON.stringify(
+              {
+                number: pullRequest.number,
+                url: pullRequest.html_url,
+                branch: request.branchName,
+                filesChanged: request.files.map((file) => file.path)
+              },
+              null,
+              2
+            )
+          );
         }
       }
     }
@@ -139,6 +221,13 @@ function canonicalWritePayload(name: GitHubMcpWriteToolName, args: Record<string
         }
       };
     }
+
+    case "create_fix_pull_request": {
+      return {
+        tool: name,
+        arguments: parseCreatePullRequestArgs(args)
+      };
+    }
   }
 }
 
@@ -177,6 +266,37 @@ function parseReadFileArgs(args: Record<string, unknown>) {
     path: expectString(args.path, "path"),
     ref: typeof args.ref === "string" ? args.ref : undefined
   };
+}
+
+function parseCreatePullRequestArgs(args: Record<string, unknown>) {
+  return {
+    owner: expectString(args.owner, "owner"),
+    repo: expectString(args.repo, "repo"),
+    baseBranch: expectString(args.baseBranch, "baseBranch"),
+    branchName: expectString(args.branchName, "branchName"),
+    title: expectString(args.title, "title"),
+    body: expectString(args.body, "body"),
+    files: expectPatchFiles(args.files)
+  };
+}
+
+function expectPatchFiles(value: unknown) {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error("Expected non-empty files array");
+  }
+
+  return value.map((file, index) => {
+    if (!file || typeof file !== "object" || Array.isArray(file)) {
+      throw new Error(`Expected file object at index ${index}`);
+    }
+
+    const record = file as Record<string, unknown>;
+    return {
+      path: expectString(record.path, `files[${index}].path`),
+      content: expectString(record.content, `files[${index}].content`),
+      sha: typeof record.sha === "string" ? record.sha : undefined
+    };
+  });
 }
 
 function expectString(value: unknown, name: string): string {

@@ -20,6 +20,25 @@ export interface GitHubContentFile {
   content: string;
 }
 
+export interface GitHubBranch {
+  name: string;
+  commit: { sha: string };
+}
+
+export interface GitHubCommit {
+  sha: string;
+  tree: { sha: string };
+}
+
+export interface GitHubTree {
+  sha: string;
+}
+
+export interface GitHubPullRequest {
+  number: number;
+  html_url: string;
+}
+
 export class GitHubRestClient {
   private readonly token: string;
   private readonly apiBaseUrl: string;
@@ -60,6 +79,116 @@ export class GitHubRestClient {
     return this.request<{ html_url: string }>(`${repoBasePath(owner, repo)}/issues/${validateIssueNumber(issueNumber)}/comments`, {
       method: "POST",
       body: JSON.stringify({ body })
+    });
+  }
+
+  async getBranch(owner: string, repo: string, branch: string): Promise<GitHubBranch> {
+    return this.request<GitHubBranch>(`${repoBasePath(owner, repo)}/branches/${encodeURIComponent(validateBranchName(branch))}`);
+  }
+
+  async createBranch(owner: string, repo: string, branch: string, sha: string): Promise<void> {
+    await this.request(`${repoBasePath(owner, repo)}/git/refs`, {
+      method: "POST",
+      body: JSON.stringify({
+        ref: `refs/heads/${validateBranchName(branch)}`,
+        sha: validateSha(sha)
+      })
+    });
+  }
+
+  async deleteBranch(owner: string, repo: string, branch: string): Promise<void> {
+    await this.request(`${repoBasePath(owner, repo)}/git/refs/heads/${encodeBranchPath(branch)}`, {
+      method: "DELETE"
+    });
+  }
+
+  async getCommit(owner: string, repo: string, sha: string): Promise<GitHubCommit> {
+    return this.request<GitHubCommit>(`${repoBasePath(owner, repo)}/git/commits/${validateSha(sha)}`);
+  }
+
+  async createTree(
+    owner: string,
+    repo: string,
+    input: {
+      baseTree: string;
+      files: Array<{ path: string; content: string }>;
+    }
+  ): Promise<GitHubTree> {
+    return this.request<GitHubTree>(`${repoBasePath(owner, repo)}/git/trees`, {
+      method: "POST",
+      body: JSON.stringify({
+        base_tree: validateSha(input.baseTree),
+        tree: input.files.map((file) => ({
+          path: validateRepositoryPath(file.path),
+          mode: "100644",
+          type: "blob",
+          content: file.content
+        }))
+      })
+    });
+  }
+
+  async createCommit(
+    owner: string,
+    repo: string,
+    input: {
+      message: string;
+      tree: string;
+      parents: string[];
+    }
+  ): Promise<GitHubCommit> {
+    return this.request<GitHubCommit>(`${repoBasePath(owner, repo)}/git/commits`, {
+      method: "POST",
+      body: JSON.stringify({
+        message: expectNonEmpty(input.message, "commit message"),
+        tree: validateSha(input.tree),
+        parents: input.parents.map(validateSha)
+      })
+    });
+  }
+
+  async createOrUpdateFile(
+    owner: string,
+    repo: string,
+    path: string,
+    input: {
+      branch: string;
+      message: string;
+      content: string;
+      sha?: string;
+    }
+  ): Promise<void> {
+    await this.request(`${repoBasePath(owner, repo)}/contents/${encodeRepositoryPath(path)}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        branch: validateBranchName(input.branch),
+        message: expectNonEmpty(input.message, "commit message"),
+        content: Buffer.from(input.content, "utf8").toString("base64"),
+        ...(input.sha ? { sha: validateSha(input.sha) } : {})
+      })
+    });
+  }
+
+  async createPullRequest(
+    owner: string,
+    repo: string,
+    input: {
+      title: string;
+      body: string;
+      head: string;
+      base: string;
+      draft?: boolean;
+    }
+  ): Promise<GitHubPullRequest> {
+    return this.request<GitHubPullRequest>(`${repoBasePath(owner, repo)}/pulls`, {
+      method: "POST",
+      body: JSON.stringify({
+        title: expectNonEmpty(input.title, "pull request title"),
+        body: input.body,
+        head: validateBranchName(input.head),
+        base: validateBranchName(input.base),
+        draft: input.draft ?? true
+      })
     });
   }
 
@@ -117,19 +246,58 @@ function validateIssueNumber(issueNumber: number): number {
   return issueNumber;
 }
 
+function validateBranchName(branch: string): string {
+  if (
+    branch.length === 0 ||
+    branch.startsWith("/") ||
+    branch.endsWith("/") ||
+    branch.includes("\\") ||
+    branch.includes("..") ||
+    !/^[A-Za-z0-9._/-]+$/.test(branch)
+  ) {
+    throw new Error("Invalid GitHub branch name");
+  }
+
+  return branch;
+}
+
+function encodeBranchPath(branch: string): string {
+  return validateBranchName(branch).split("/").map(encodeURIComponent).join("/");
+}
+
+function validateSha(sha: string): string {
+  if (!/^[a-f0-9]{40}$/i.test(sha)) {
+    throw new Error("Invalid Git commit sha");
+  }
+
+  return sha;
+}
+
 function encodeRepositoryPath(path: string): string {
+  return validateRepositoryPath(path)
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+}
+
+function validateRepositoryPath(path: string): string {
   if (path.length === 0 || path.startsWith("/") || path.includes("\\")) {
     throw new Error("Invalid GitHub repository path");
   }
 
-  return path
-    .split("/")
-    .map((segment) => {
-      if (segment.length === 0 || segment === "." || segment === "..") {
-        throw new Error("Invalid GitHub repository path");
-      }
+  for (const segment of path.split("/")) {
+    if (segment.length === 0 || segment === "." || segment === "..") {
+      throw new Error("Invalid GitHub repository path");
+    }
+  }
 
-      return encodeURIComponent(segment);
-    })
-    .join("/");
+  return path;
+}
+
+function expectNonEmpty(value: string, name: string): string {
+  if (value.length === 0) {
+    throw new Error(`Invalid ${name}`);
+  }
+
+  return value;
 }

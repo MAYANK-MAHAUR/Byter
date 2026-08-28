@@ -1,24 +1,25 @@
 import type { GitHubIssueRef, ReproRun, RunEvent, RunStatus } from "./types.js";
 
 const allowedTransitions: Record<RunStatus, RunStatus[]> = {
-  received: ["security-review"],
-  "security-review": ["triaging", "rejected"],
+  received: ["security-review", "failed"],
+  "security-review": ["triaging", "rejected", "failed"],
   rejected: [],
-  triaging: ["needs-info", "environment-building"],
+  triaging: ["needs-info", "environment-building", "failed"],
   "needs-info": [],
-  "environment-building": ["reproducing", "environment-failed"],
+  failed: [],
+  "environment-building": ["reproducing", "environment-failed", "failed"],
   "environment-failed": [],
-  reproducing: ["verified", "flaky", "not-reproduced"],
+  reproducing: ["verified", "flaky", "not-reproduced", "failed"],
   "not-reproduced": [],
   flaky: [],
-  verified: ["minimizing"],
-  minimizing: ["fixing"],
-  fixing: ["validating", "fix-failed"],
-  validating: ["patch-ready", "fix-failed"],
+  verified: ["minimizing", "failed"],
+  minimizing: ["fixing", "failed"],
+  fixing: ["validating", "fix-failed", "failed"],
+  validating: ["patch-ready", "fix-failed", "failed"],
   "fix-failed": [],
-  "patch-ready": ["awaiting-approval"],
-  "awaiting-approval": ["approved", "rejected"],
-  approved: ["pr-created"],
+  "patch-ready": ["awaiting-approval", "failed"],
+  "awaiting-approval": ["approved", "rejected", "failed"],
+  approved: ["pr-created", "failed"],
   "pr-created": []
 };
 

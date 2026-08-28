@@ -4,6 +4,7 @@ export type RunStatus =
   | "rejected"
   | "triaging"
   | "needs-info"
+  | "failed"
   | "environment-building"
   | "environment-failed"
   | "reproducing"

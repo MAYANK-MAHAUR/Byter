@@ -25,4 +25,23 @@ describe("ReproSmith state machine", () => {
       "Invalid ReproSmith transition: received -> verified"
     );
   });
+
+  it("allows runs to enter a terminal failed state from active work", () => {
+    const run = transitionRun(createRun("run_1", issue), "security-review", "Scanning issue text");
+    const failed = transitionRun(run, "failed", "Runtime crashed before triage completed");
+
+    expect(failed.status).toBe("failed");
+    expect(failed.events.at(-1)).toMatchObject({
+      status: "failed",
+      message: "Runtime crashed before triage completed"
+    });
+  });
+
+  it("does not leave the terminal failed state", () => {
+    const failed = transitionRun(createRun("run_1", issue), "failed", "Unexpected worker failure");
+
+    expect(() => transitionRun(failed, "triaging", "Try again")).toThrow(
+      "Invalid ReproSmith transition: failed -> triaging"
+    );
+  });
 });

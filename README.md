@@ -23,11 +23,13 @@ The hackathon vertical slice is complete:
 - pnpm monorepo with shared TypeScript types and project references
 - deterministic ReproSmith state machine
 - GitHub App auth, webhook verification, REST client, and MCP-style tools
+- signed GitHub issues webhook endpoint in the production server
 - TrueForge runtime adapter with sandbox and dynamic subagent configuration
 - reproduction runner with timeouts, output limits, and secret-safe environment filtering
 - failure fingerprinting, repeated verification, and input minimization
 - patch validator with protected reproducer files, symlink defense, and regression checks
 - React dashboard for run timeline, evidence, security quarantine, and approval controls
+- production Node server for dashboard/API serving, receipt persistence, and Railway health checks
 - local end-to-end demo runner
 - GitHub Actions CI running the full workspace verification
 
@@ -69,6 +71,20 @@ In development, the dashboard calls the local Vite API:
 - `GET /api/demo-run` executes the demo runner and returns freshly generated proof data.
 - `POST /api/approvals` records the selected approval action without mutating GitHub.
 
+For a production-style local run:
+
+```bash
+pnpm build
+PORT=3000 DATA_DIR=.data pnpm start
+```
+
+The production server exposes:
+
+- `GET /healthz` for deployment health checks.
+- `GET /api/demo-run` for freshly generated proof data.
+- `POST /api/approvals` for authenticated, run-matched, persisted approval receipts.
+- `POST /api/github/webhook` for signed, delivery-deduplicated GitHub issues webhooks.
+
 ## Environment
 
 Copy `.env.example` to `.env.local` for local secrets:
@@ -84,7 +100,8 @@ Key variables:
 - `MODEL_PROVIDER`, `MODEL_NAME`, `MODEL_BASE_URL`, `MODEL_API_KEY`
 - `TRUEFORGE_URL`, `TRUEFORGE_API_KEY`
 - `DAYTONA_API_KEY`
-- `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`
+- `APPROVAL_TOKEN`, `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`
+- `DATA_DIR` for server-side JSONL receipt/run persistence
 
 When using AgentRouter through a deployed TrueForge service, make sure that service sends AgentRouter's required request headers.
 
@@ -93,6 +110,7 @@ When using AgentRouter through a deployed TrueForge service, make sure that serv
 ```text
 apps/demo-runner    Local end-to-end proof runner
 apps/github-mcp     Narrow GitHub MCP-style read/write boundary
+apps/server         Production Node server for dashboard APIs and webhooks
 apps/web            React dashboard console
 demo/buggy-parser   Seeded parser fixture
 packages/agent      TrueForge runtime adapter and agent prompt

@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "composite": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "paths": {
+      "@reprosmith/core": ["../../packages/core/src/index.js"],
+      "@reprosmith/github": ["../../packages/github/src/index.js"],
+      "@reprosmith/demo-runner": ["../../apps/demo-runner/src/index.ts"]
+    }
+  },
+  "references": [{ "path": "../../packages/core" }, { "path": "../../packages/github" }, { "path": "../demo-runner" }],
+  "include": ["src/**/*.ts"],
+  "exclude": ["dist", "test"]
+}
