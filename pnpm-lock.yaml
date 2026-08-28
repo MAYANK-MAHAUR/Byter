@@ -45,6 +45,9 @@ importers:
 
   apps/server:
     dependencies:
+      '@reprosmith/agent':
+        specifier: workspace:*
+        version: link:../../packages/agent
       '@reprosmith/core':
         specifier: workspace:*
         version: link:../../packages/core

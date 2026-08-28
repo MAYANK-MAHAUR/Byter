@@ -25,6 +25,7 @@ The hackathon vertical slice is complete:
 - GitHub App auth, webhook verification, REST client, and MCP-style tools
 - signed GitHub issues webhook endpoint in the production server
 - TrueForge runtime adapter with sandbox and dynamic subagent configuration
+- optional webhook-to-TrueForge session handoff when `TRUEFORGE_URL` and `TRUEFORGE_API_KEY` are configured
 - reproduction runner with timeouts, output limits, and secret-safe environment filtering
 - failure fingerprinting, repeated verification, and input minimization
 - patch validator with protected reproducer files, symlink defense, and regression checks
@@ -83,7 +84,7 @@ The production server exposes:
 - `GET /healthz` for deployment health checks.
 - `GET /api/demo-run` for freshly generated proof data.
 - `POST /api/approvals` for authenticated, run-matched, persisted approval receipts.
-- `POST /api/github/webhook` for signed, delivery-deduplicated GitHub issues webhooks.
+- `POST /api/github/webhook` for signed, delivery-deduplicated GitHub issues webhooks. When TrueForge credentials are configured, safe issues immediately start a TrueForge session and persist the session and turn IDs with the run record.
 
 ## Environment
 

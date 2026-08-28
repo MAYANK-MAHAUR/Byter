@@ -4,6 +4,8 @@ import { appendFile, mkdir, readFile, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { ReproSmithTrueForgeRuntime } from "@reprosmith/agent";
+import type { StartReproSmithSessionInput, StartReproSmithSessionResult } from "@reprosmith/agent";
 import { createRun, scanIssueText, transitionRun } from "@reprosmith/core";
 import { runDemo, type DemoRunSummary } from "@reprosmith/demo-runner";
 import { parseIssueWebhook, verifyGitHubWebhook } from "@reprosmith/github";
@@ -17,11 +19,17 @@ let demoInFlight: Promise<DemoRunSummary> | undefined;
 export interface ReproSmithServerOptions {
   staticDir?: string;
   dataDir?: string;
+  trueForgeRuntime?: ReproSmithSessionStarter;
+}
+
+interface ReproSmithSessionStarter {
+  startSession(input: StartReproSmithSessionInput): Promise<StartReproSmithSessionResult>;
 }
 
 export function createReproSmithServer(options: ReproSmithServerOptions = {}): Server {
   const staticDir = resolve(options.staticDir ?? process.env.STATIC_DIR ?? defaultStaticDir());
   const dataDir = options.dataDir ?? process.env.DATA_DIR;
+  const trueForgeRuntime = options.trueForgeRuntime ?? trueForgeRuntimeFromEnv();
 
   return createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
@@ -43,7 +51,7 @@ export function createReproSmithServer(options: ReproSmithServerOptions = {}): S
       }
 
       if (url.pathname === "/api/github/webhook") {
-        await handleGitHubWebhook(request, response, dataDir ? resolve(dataDir) : undefined);
+        await handleGitHubWebhook(request, response, dataDir ? resolve(dataDir) : undefined, trueForgeRuntime);
         return;
       }
 
@@ -63,7 +71,8 @@ export function createReproSmithServer(options: ReproSmithServerOptions = {}): S
 async function handleGitHubWebhook(
   request: IncomingMessage,
   response: ServerResponse,
-  dataDir: string | undefined
+  dataDir: string | undefined,
+  trueForgeRuntime: ReproSmithSessionStarter | undefined
 ): Promise<void> {
   if (request.method !== "POST") {
     sendJson(response, 405, { error: "Method not allowed" });
@@ -132,6 +141,8 @@ async function handleGitHubWebhook(
     scan.safeToExecute ? "triaging" : "rejected",
     scan.safeToExecute ? "Issue ready for TrueForge triage" : "Issue rejected by security policy"
   );
+  const orchestration = await startTrueForgeSessionForIssue(run, webhook, scan.safeToExecute, trueForgeRuntime);
+  run = orchestration.run;
 
   const record = {
     receivedAt: new Date().toISOString(),
@@ -140,12 +151,76 @@ async function handleGitHubWebhook(
     issueTitle: webhook.issue.title,
     issueBody: webhook.issue.body ?? "",
     run,
-    scan
+    scan,
+    trueForge: orchestration.trueForge
   };
   await mkdir(dataDir, { recursive: true });
   await appendFile(join(dataDir, "webhook-runs.jsonl"), `${JSON.stringify(record)}\n`, "utf8");
 
   sendJson(response, 202, record);
+}
+
+async function startTrueForgeSessionForIssue(
+  run: ReturnType<typeof createRun>,
+  webhook: ReturnType<typeof parseIssueWebhook>,
+  safeToExecute: boolean,
+  trueForgeRuntime: ReproSmithSessionStarter | undefined
+) {
+  if (!safeToExecute) {
+    return {
+      run,
+      trueForge: {
+        status: "skipped",
+        reason: "Issue was rejected by security policy"
+      }
+    };
+  }
+
+  if (!trueForgeRuntime) {
+    return {
+      run,
+      trueForge: {
+        status: "not-configured",
+        reason: "TRUEFORGE_URL and TRUEFORGE_API_KEY are required before live orchestration can start"
+      }
+    };
+  }
+
+  try {
+    const result = await trueForgeRuntime.startSession({
+      repository: webhook.repository.full_name,
+      issueUrl: webhook.issue.html_url,
+      issueTitle: webhook.issue.title,
+      issueBody: webhook.issue.body ?? ""
+    });
+
+    return {
+      run: transitionRun(run, "environment-building", "TrueForge session started", {
+        evidence: {
+          sessionId: result.session.id,
+          turnId: result.turn.id,
+          turnStatus: result.turn.status
+        }
+      }),
+      trueForge: {
+        status: "started",
+        session: result.session,
+        turn: result.turn
+      }
+    };
+  } catch (error) {
+    return {
+      run: transitionRun(run, "failed", "TrueForge session start failed", {
+        evidence: {
+          error: error instanceof Error ? error.message : "Unknown TrueForge error"
+        }
+      }),
+      trueForge: {
+        status: "failed",
+        error: error instanceof Error ? error.message : "Unknown TrueForge error"
+      }
+    };
+  }
 }
 
 async function handleDemoRun(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -401,6 +476,21 @@ class HttpError extends Error {
     super(publicMessage);
     this.name = "HttpError";
   }
+}
+
+function trueForgeRuntimeFromEnv(): ReproSmithSessionStarter | undefined {
+  const baseUrl = process.env.TRUEFORGE_URL;
+  const token = process.env.TRUEFORGE_API_KEY;
+  if (!baseUrl || !token) {
+    return undefined;
+  }
+
+  return new ReproSmithTrueForgeRuntime({
+    baseUrl,
+    token,
+    modelName: process.env.MODEL_NAME ?? "glm-5.3",
+    modelProvider: process.env.MODEL_PROVIDER ?? "agentrouter"
+  });
 }
 
 function defaultStaticDir(): string {

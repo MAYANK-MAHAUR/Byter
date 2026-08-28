@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createReproSmithServer } from "../src/server.js";
 import { signWebhookPayload } from "@reprosmith/github";
 
@@ -15,6 +15,8 @@ describe("ReproSmith production server", () => {
   beforeEach(async () => {
     process.env.GITHUB_WEBHOOK_SECRET = "webhook-secret";
     process.env.APPROVAL_TOKEN = "approval-token";
+    delete process.env.TRUEFORGE_URL;
+    delete process.env.TRUEFORGE_API_KEY;
     const staticDir = await mkdtemp(join(tmpdir(), "reprosmith-static-"));
     dataDir = await mkdtemp(join(tmpdir(), "reprosmith-data-"));
     await writeFile(join(staticDir, "index.html"), "<main>ReproSmith</main>", "utf8");
@@ -29,6 +31,8 @@ describe("ReproSmith production server", () => {
   afterEach(async () => {
     delete process.env.GITHUB_WEBHOOK_SECRET;
     delete process.env.APPROVAL_TOKEN;
+    delete process.env.TRUEFORGE_URL;
+    delete process.env.TRUEFORGE_API_KEY;
     await closeServer();
   });
 
@@ -106,7 +110,67 @@ describe("ReproSmith production server", () => {
 
     expect(response.status).toBe(202);
     expect(body.run.status).toBe("triaging");
+    expect(body.trueForge.status).toBe("not-configured");
     await expect(readFile(join(dataDir, "webhook-runs.jsonl"), "utf8")).resolves.toContain("Parser crash");
+  });
+
+  it("starts a TrueForge session for safe signed GitHub issue webhooks", async () => {
+    const staticDir = await mkdtemp(join(tmpdir(), "reprosmith-static-"));
+    const liveDataDir = await mkdtemp(join(tmpdir(), "reprosmith-data-"));
+    await writeFile(join(staticDir, "index.html"), "<main>ReproSmith</main>", "utf8");
+    const trueForgeRuntime = {
+      startSession: vi.fn().mockResolvedValue({
+        session: { id: "session-live-1", title: null },
+        turn: { id: "turn-live-1", sessionId: "session-live-1", status: "running" }
+      })
+    };
+    const server = createReproSmithServer({ staticDir, dataDir: liveDataDir, trueForgeRuntime });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address() as AddressInfo;
+    const isolatedBaseUrl = `http://127.0.0.1:${address.port}`;
+    const payload = JSON.stringify({
+      action: "opened",
+      issue: {
+        number: 20,
+        title: "Parser crash in production",
+        body: "Trailing escape crashes the parser.",
+        html_url: "https://github.test/o/r/issues/20"
+      },
+      repository: {
+        name: "r",
+        full_name: "o/r",
+        default_branch: "main",
+        owner: { login: "o" }
+      }
+    });
+
+    try {
+      const response = await fetch(`${isolatedBaseUrl}/api/github/webhook`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-GitHub-Event": "issues",
+          "X-GitHub-Delivery": "delivery-live-20",
+          "X-Hub-Signature-256": signWebhookPayload(payload, "webhook-secret")
+        },
+        body: payload
+      });
+      const body = await response.json();
+
+      expect(response.status).toBe(202);
+      expect(trueForgeRuntime.startSession).toHaveBeenCalledWith({
+        repository: "o/r",
+        issueUrl: "https://github.test/o/r/issues/20",
+        issueTitle: "Parser crash in production",
+        issueBody: "Trailing escape crashes the parser."
+      });
+      expect(body.run.status).toBe("environment-building");
+      expect(body.trueForge.status).toBe("started");
+      expect(body.trueForge.session.id).toBe("session-live-1");
+      await expect(readFile(join(liveDataDir, "webhook-runs.jsonl"), "utf8")).resolves.toContain("session-live-1");
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    }
   });
 
   it("deduplicates repeated GitHub delivery IDs", async () => {

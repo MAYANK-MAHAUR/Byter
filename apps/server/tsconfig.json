@@ -6,12 +6,18 @@
     "outDir": "dist",
     "rootDir": "src",
     "paths": {
+      "@reprosmith/agent": ["../../packages/agent/src/index.ts"],
       "@reprosmith/core": ["../../packages/core/src/index.js"],
       "@reprosmith/github": ["../../packages/github/src/index.js"],
       "@reprosmith/demo-runner": ["../../apps/demo-runner/src/index.ts"]
     }
   },
-  "references": [{ "path": "../../packages/core" }, { "path": "../../packages/github" }, { "path": "../demo-runner" }],
+  "references": [
+    { "path": "../../packages/agent" },
+    { "path": "../../packages/core" },
+    { "path": "../../packages/github" },
+    { "path": "../demo-runner" }
+  ],
   "include": ["src/**/*.ts"],
   "exclude": ["dist", "test"]
 }
