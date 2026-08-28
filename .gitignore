@@ -19,9 +19,6 @@ coverage/
 
 # Local runtime state
 .reprosmith/
-PROJECT_STATE.md
-docs/DECISIONS.md
-NEEDS_USER.md
 
 # Reference clones and scratch
 trueforge-repo/
@@ -39,4 +36,3 @@ Thumbs.db
 .idea/
 .vscode/*
 !.vscode/extensions.json
-
