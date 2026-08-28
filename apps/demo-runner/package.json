@@ -1,5 +1,5 @@
 {
-  "name": "@reprosmith/agent",
+  "name": "@reprosmith/demo-runner",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -13,13 +13,14 @@
   },
   "scripts": {
     "build": "tsc -b tsconfig.json",
+    "demo": "node dist/cli.js",
     "lint": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --config vitest.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@reprosmith/core": "workspace:*",
-    "@truefoundry/trueforge-sdk": "0.1.0-rc.1"
+    "@reprosmith/repro-engine": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.5.4",

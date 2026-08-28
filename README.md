@@ -17,7 +17,12 @@ pnpm install
 pnpm test
 pnpm typecheck
 pnpm build
+pnpm demo:e2e
 ```
+
+## Demo Path
+
+`pnpm demo:e2e` runs a local end-to-end proof loop with no GitHub writes. It scans safe and quarantined issue text, drives the ReproSmith state machine, verifies the seeded parser crash three times, validates a candidate patch in a disposable workspace, and prints the evidence summary as JSON.
 
 ## Environment
 
@@ -32,4 +37,3 @@ Copy `.env.example` to `.env.local` and fill in local secrets. Do not commit `.e
 5. Patch validation: before/after proof, approval checkpoint, draft PR creation.
 6. Dashboard: run timeline, evidence, approval controls, security quarantine view.
 7. Demo and hardening: e2e path, security fixtures, setup docs.
-

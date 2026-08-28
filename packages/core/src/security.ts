@@ -18,7 +18,7 @@ const rules: SecurityRule[] = [
     id: "dangerous-shell",
     severity: "critical",
     reason: "Issue text contains destructive shell instructions.",
-    pattern: /\b(rm\s+-rf\s+\/|format\s+[a-z]:|del\s+\/[fsq]|Remove-Item\b.{0,40}-Recurse)\b/i
+    pattern: /\b(rm\s+-rf\s+\/(?=\s|$)|format\s+[a-z]:(?=\s|$)|del\s+\/[fsq]+(?=\s|$)|Remove-Item\b.{0,40}-Recurse\b)/i
   },
   {
     id: "prompt-injection",
