@@ -46,6 +46,7 @@ docker run --rm -p 3000:3000 --env-file .env.local reprosmith
 
 ```bash
 curl https://<railway-domain>/healthz
+curl https://<railway-domain>/api/runs/latest
 curl https://<railway-domain>/api/demo-run
 ```
 
@@ -67,6 +68,8 @@ After setting `TRUEFORGE_URL` and `TRUEFORGE_API_KEY`, send one signed test issu
 ```
 
 If `trueForge.status` is `not-configured`, the server accepted and persisted the webhook but did not start live orchestration.
+
+Refresh the dashboard after the signed delivery. It should show the latest persisted webhook run first; `/api/demo-run` is only the fallback when no live run exists.
 
 ## Known Limits
 

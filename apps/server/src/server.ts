@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { appendFile, mkdir, readFile, stat } from "node:fs/promises";
+import { appendFile, mkdir, open, readFile, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +12,7 @@ import { parseIssueWebhook, verifyGitHubWebhook } from "@reprosmith/github";
 
 type ApprovalActionId = "approve-pr" | "request-diff" | "reject-run";
 const maxRequestBodyBytes = 64 * 1024;
+const maxLatestRunReadBytes = 256 * 1024;
 const demoCacheTtlMs = 5_000;
 let demoCache: { createdAt: number; summary: DemoRunSummary } | undefined;
 let demoInFlight: Promise<DemoRunSummary> | undefined;
@@ -42,6 +43,11 @@ export function createReproSmithServer(options: ReproSmithServerOptions = {}): S
 
       if (url.pathname === "/api/demo-run") {
         await handleDemoRun(request, response);
+        return;
+      }
+
+      if (url.pathname === "/api/runs/latest") {
+        await handleLatestRun(request, response, dataDir ? resolve(dataDir) : undefined);
         return;
       }
 
@@ -158,6 +164,30 @@ async function handleGitHubWebhook(
   await appendFile(join(dataDir, "webhook-runs.jsonl"), `${JSON.stringify(record)}\n`, "utf8");
 
   sendJson(response, 202, record);
+}
+
+async function handleLatestRun(
+  request: IncomingMessage,
+  response: ServerResponse,
+  dataDir: string | undefined
+): Promise<void> {
+  if (request.method !== "GET") {
+    sendJson(response, 405, { error: "Method not allowed" });
+    return;
+  }
+
+  if (!dataDir) {
+    sendJson(response, 404, { error: "No persisted webhook runs are configured" });
+    return;
+  }
+
+  const latest = await readLatestJsonlRecord(dataDir, "webhook-runs.jsonl");
+  if (!latest) {
+    sendJson(response, 404, { error: "No persisted webhook runs found" });
+    return;
+  }
+
+  sendJson(response, 200, latest);
 }
 
 async function startTrueForgeSessionForIssue(
@@ -400,6 +430,36 @@ async function deliveryWasProcessed(dataDir: string, deliveryId: string): Promis
       });
   } catch {
     return false;
+  }
+}
+
+async function readLatestJsonlRecord(dataDir: string, fileName: string): Promise<unknown | undefined> {
+  let file;
+  try {
+    file = await open(join(dataDir, fileName), "r");
+  } catch {
+    return undefined;
+  }
+
+  try {
+    const metadata = await file.stat();
+    const length = Math.min(metadata.size, maxLatestRunReadBytes);
+    const start = metadata.size - length;
+    const buffer = Buffer.alloc(length);
+    await file.read(buffer, 0, length, start);
+
+    const lines = buffer.toString("utf8").split("\n").filter(Boolean);
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      try {
+        return JSON.parse(lines[index]) as unknown;
+      } catch {
+        continue;
+      }
+    }
+
+    return undefined;
+  } finally {
+    await file.close();
   }
 }
 

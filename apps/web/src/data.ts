@@ -29,13 +29,15 @@ export interface QuarantinedReport {
 
 export interface DashboardRun extends ReproRun {
   generatedAt: string;
+  source: "webhook" | "demo";
+  sourceLabel: string;
   repoLabel: string;
   issueTitle: string;
   assignee: string;
   runtime: string;
   model: string;
   currentBranch: string;
-  candidatePatch: {
+  candidatePatch?: {
     title: string;
     files: string[];
     hash: string;
@@ -47,7 +49,33 @@ export interface DashboardRun extends ReproRun {
   quarantinedReports: QuarantinedReport[];
 }
 
+interface WebhookRunRecord {
+  receivedAt: string;
+  deliveryId: string;
+  repository: string;
+  issueTitle: string;
+  issueBody: string;
+  run: ReproRun;
+  scan: SecurityScanResult;
+  trueForge?: {
+    status?: string;
+    reason?: string;
+    error?: string;
+    session?: { id?: string; title?: string | null };
+    turn?: { id?: string; status?: string };
+  };
+}
+
 export async function fetchDashboardRun(fetchImpl: typeof fetch = fetch): Promise<DashboardRun> {
+  const liveResponse = await fetchImpl("/api/runs/latest", { cache: "no-store" });
+  if (liveResponse.ok) {
+    return toDashboardRunFromWebhook((await liveResponse.json()) as WebhookRunRecord);
+  }
+
+  if (![404, 503].includes(liveResponse.status)) {
+    throw new Error(`Live run API returned ${liveResponse.status}`);
+  }
+
   const response = await fetchImpl("/api/demo-run", { cache: "no-store" });
   if (!response.ok) {
     throw new Error(`Run API returned ${response.status}`);
@@ -66,6 +94,8 @@ export function toDashboardRun(summary: DemoRunSummary): DashboardRun {
   return {
     ...summary.run,
     generatedAt: summary.generatedAt,
+    source: "demo",
+    sourceLabel: "local proof demo",
     repoLabel: summary.repository.replace("/", " / "),
     issueTitle: summary.issueTitle,
     assignee: "ReproSmith agent",
@@ -126,6 +156,68 @@ export function toDashboardRun(summary: DemoRunSummary): DashboardRun {
             issueNumber: summary.run.issue.issueNumber,
             title: "Quarantined issue instruction",
             security: summary.quarantinedIssueScan
+          }
+        ]
+      : []
+  };
+}
+
+export function toDashboardRunFromWebhook(record: WebhookRunRecord): DashboardRun {
+  const trueForgeStatus = record.trueForge?.status ?? "unknown";
+  const trueForgeDetail =
+    record.trueForge?.session?.id ??
+    record.trueForge?.reason ??
+    record.trueForge?.error ??
+    "No TrueForge metadata returned";
+  const trueForgeBlocked = trueForgeStatus === "failed" || trueForgeStatus === "not-configured";
+  const issueBodySize = new Blob([record.issueBody]).size;
+
+  return {
+    ...record.run,
+    generatedAt: record.receivedAt,
+    source: "webhook",
+    sourceLabel: "latest GitHub webhook",
+    repoLabel: record.repository.replace("/", " / "),
+    issueTitle: record.issueTitle,
+    assignee: trueForgeStatus === "started" ? "TrueForge agent" : "Server intake",
+    runtime: trueForgeStatus === "started" ? "TrueForge Agent Harness" : "Webhook intake",
+    model: trueForgeStatus === "started" ? "Configured by TrueForge" : "Not started",
+    currentBranch: `delivery ${record.deliveryId}`,
+    evidence: [
+      {
+        id: "security-scan",
+        kind: "policy",
+        title: "Security scan",
+        value: pluralize(record.scan.findings.length, "finding"),
+        detail: record.scan.safeToExecute ? "Issue cleared for live orchestration" : "Issue blocked before execution",
+        status: record.scan.safeToExecute ? "verified" : "blocked"
+      },
+      {
+        id: "trueforge-session",
+        kind: "stdout",
+        title: "TrueForge handoff",
+        value: trueForgeStatus,
+        detail: trueForgeDetail,
+        status: trueForgeBlocked ? "blocked" : trueForgeStatus === "started" ? "verified" : "warning"
+      },
+      {
+        id: "issue-payload",
+        kind: "stack",
+        title: "Issue payload",
+        value: `${issueBodySize} bytes`,
+        detail: `received ${formatWebhookTime(record.receivedAt)}`,
+        status: "verified"
+      }
+    ],
+    approvals: [],
+    security: record.scan,
+    quarantinedReports: record.scan.findings.length
+      ? [
+          {
+            id: `webhook-${record.deliveryId}`,
+            issueNumber: record.run.issue.issueNumber,
+            title: record.issueTitle,
+            security: record.scan
           }
         ]
       : []
@@ -207,4 +299,12 @@ function shortPath(path: string): string {
 
 function pluralize(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+function formatWebhookTime(value: string): string {
+  return new Intl.DateTimeFormat("en", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).format(new Date(value));
 }

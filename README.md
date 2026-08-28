@@ -69,6 +69,7 @@ The dashboard is a local console for the same proof path: timeline, reproduction
 
 In development, the dashboard calls the local Vite API:
 
+- `GET /api/runs/latest` returns 404 in the Vite dev server so the dashboard falls back to generated demo proof.
 - `GET /api/demo-run` executes the demo runner and returns freshly generated proof data.
 - `POST /api/approvals` records the selected approval action without mutating GitHub.
 
@@ -82,6 +83,7 @@ PORT=3000 DATA_DIR=.data pnpm start
 The production server exposes:
 
 - `GET /healthz` for deployment health checks.
+- `GET /api/runs/latest` for the latest persisted GitHub webhook run.
 - `GET /api/demo-run` for freshly generated proof data.
 - `POST /api/approvals` for authenticated, run-matched, persisted approval receipts.
 - `POST /api/github/webhook` for signed, delivery-deduplicated GitHub issues webhooks. When TrueForge credentials are configured, safe issues immediately start a TrueForge session and persist the session and turn IDs with the run record.
