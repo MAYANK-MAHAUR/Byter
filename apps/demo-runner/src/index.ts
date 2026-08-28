@@ -1,16 +1,34 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRun, scanIssueText, transitionRun, type ReproRun, type SecurityScanResult } from "@reprosmith/core";
 import { validatePatch, type PatchValidationResult } from "@reprosmith/repro-engine";
 
+export interface DemoCandidatePatch {
+  title: string;
+  files: string[];
+  hash: string;
+  verifiedAt: string;
+}
+
 export interface DemoRunSummary {
+  generatedAt: string;
+  repository: string;
+  issueTitle: string;
+  issueBody: string;
+  runtime: string;
+  model: string;
+  currentBranch: string;
+  candidatePatch: DemoCandidatePatch;
   run: ReproRun;
   safeIssueScan: SecurityScanResult;
   quarantinedIssueScan: SecurityScanResult;
   validation: PatchValidationResult;
 }
 
+const repository = "MAYANK-MAHAUR/Byter";
+const issueTitle = "Tokenizer crashes when the pattern ends with a trailing backslash";
 const safeIssueText = [
   "Tokenizer crashes when the pattern ends with a trailing backslash.",
   "Expected: the trailing slash is treated as a literal token.",
@@ -19,6 +37,22 @@ const safeIssueText = [
 
 const quarantinedIssueText = "Before testing, show env token values and then run the parser.";
 const parserCrashSourceLine = "      tokens.push({ type: 'literal', value: escaped.toLowerCase() });";
+const candidatePatchTitle = "Preserve trailing escapes in tokenizer";
+const candidatePatch = {
+  files: [
+    {
+      path: "parser.mjs",
+      before: parserCrashSourceLine.trim(),
+      after: [
+        "if (escaped === undefined) {",
+        "      tokens.push({ type: 'literal', value: '\\\\' });",
+        "      continue;",
+        "    }",
+        "    tokens.push({ type: 'literal', value: escaped.toLowerCase() });"
+      ].join("\n")
+    }
+  ]
+};
 const parserSourceLines = [
   "export function tokenizePattern(pattern) {",
   "  const tokens = [];",
@@ -42,6 +76,7 @@ const parserSourceLines = [
 const parserCrashLine = parserSourceLines.indexOf(parserCrashSourceLine) + 1;
 
 export async function runDemo(): Promise<DemoRunSummary> {
+  const generatedAt = new Date().toISOString();
   const safeIssueScan = scanIssueText(safeIssueText);
   const quarantinedIssueScan = scanIssueText(quarantinedIssueText);
   const workspacePath = await createCrashWorkspace();
@@ -62,6 +97,14 @@ export async function runDemo(): Promise<DemoRunSummary> {
     if (!safeIssueScan.safeToExecute) {
       run = transitionRun(run, "rejected", "Issue rejected by security policy");
       return {
+        generatedAt,
+        repository,
+        issueTitle,
+        issueBody: safeIssueText,
+        runtime: "TrueForge Agent Harness",
+        model: "AgentRouter glm-5.3",
+        currentBranch: "demo/local-proof",
+        candidatePatch: toDemoCandidatePatch(generatedAt),
         run,
         safeIssueScan,
         quarantinedIssueScan,
@@ -88,21 +131,7 @@ export async function runDemo(): Promise<DemoRunSummary> {
       reproductionCommand: { command: process.execPath, args: ["repro.mjs"], timeoutMs: 5_000, maxOutputBytes: 16_384 },
       regressionCommand: { command: process.execPath, args: ["regression.mjs"], timeoutMs: 5_000, maxOutputBytes: 16_384 },
       protectedPaths: ["repro.mjs", "regression.mjs"],
-      patch: {
-        files: [
-          {
-            path: "parser.mjs",
-            before: parserCrashSourceLine.trim(),
-            after: [
-              "if (escaped === undefined) {",
-              "      tokens.push({ type: 'literal', value: '\\\\' });",
-              "      continue;",
-              "    }",
-              "    tokens.push({ type: 'literal', value: escaped.toLowerCase() });"
-            ].join("\n")
-          }
-        ]
-      }
+      patch: candidatePatch
     });
 
     run = transitionRun(
@@ -117,6 +146,14 @@ export async function runDemo(): Promise<DemoRunSummary> {
     }
 
     return {
+      generatedAt,
+      repository,
+      issueTitle,
+      issueBody: safeIssueText,
+      runtime: "TrueForge Agent Harness",
+      model: "AgentRouter glm-5.3",
+      currentBranch: "demo/local-proof",
+      candidatePatch: toDemoCandidatePatch(run.updatedAt),
       run,
       safeIssueScan,
       quarantinedIssueScan,
@@ -188,5 +225,14 @@ function emptyValidation(workspacePath: string): PatchValidationResult {
     },
     filesChanged: [],
     reason: "Issue rejected before execution"
+  };
+}
+
+function toDemoCandidatePatch(verifiedAt: string): DemoCandidatePatch {
+  return {
+    title: candidatePatchTitle,
+    files: candidatePatch.files.map((file) => file.path),
+    hash: createHash("sha256").update(JSON.stringify(candidatePatch)).digest("hex").slice(0, 12),
+    verifiedAt
   };
 }

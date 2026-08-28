@@ -8,6 +8,7 @@ import {
   GitPullRequestArrow,
   Lock,
   RadioTower,
+  RefreshCw,
   ShieldAlert,
   ShieldCheck,
   Timer,
@@ -21,11 +22,12 @@ import {
   type ApprovalSubmission
 } from "./approval-client";
 import {
-  demoRun,
+  fetchDashboardRun,
   happyPathStatuses,
   statusLabels,
   type ApprovalAction,
   type ApprovalActionId,
+  type DashboardRun,
   type EvidenceItem
 } from "./data";
 
@@ -43,23 +45,45 @@ const actionIcons: Record<ApprovalAction["impact"], ComponentType<{ size?: numbe
 };
 
 function App() {
-  const run = demoRun;
+  const [run, setRun] = useState<DashboardRun | undefined>();
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState<string | undefined>();
   const [pendingAction, setPendingAction] = useState<ApprovalActionId | undefined>();
   const [approval, setApproval] = useState<ApprovalSubmission | undefined>();
   const [approvalError, setApprovalError] = useState<string | undefined>();
-  const displayedStatus = approval?.resultStatus ?? run.status;
+  const displayedStatus: RunStatus | undefined = approval?.resultStatus ?? run?.status;
   const displayedEvents = useMemo(
-    () => appendApprovalEvent(run.events, displayedStatus, approval),
-    [approval, displayedStatus, run.events]
+    () => (run && displayedStatus ? appendApprovalEvent(run.events, displayedStatus, approval) : []),
+    [approval, displayedStatus, run]
   );
-  const progressLabel = progressLabelFor(displayedStatus);
-  const latestQuarantine = run.quarantinedReports[0];
 
   useEffect(() => {
-    setApproval(readApprovalSubmission(run.id));
-  }, [run.id]);
+    void loadRun();
+  }, []);
+
+  async function loadRun() {
+    setIsRefreshing(true);
+    setLoadError(undefined);
+
+    try {
+      const nextRun = await fetchDashboardRun();
+      setRun(nextRun);
+      setApproval(readApprovalSubmission(nextRun.id));
+      setApprovalError(undefined);
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "Run API failed");
+    } finally {
+      setIsLoading(false);
+      setIsRefreshing(false);
+    }
+  }
 
   async function handleApproval(actionId: ApprovalActionId) {
+    if (!run) {
+      return;
+    }
+
     setPendingAction(actionId);
     setApprovalError(undefined);
 
@@ -76,6 +100,37 @@ function App() {
       setPendingAction(undefined);
     }
   }
+
+  if (isLoading) {
+    return (
+      <main className="shell center-shell">
+        <section className="load-state" aria-live="polite">
+          <RefreshCw size={22} aria-hidden="true" />
+          <h1>Loading ReproSmith run</h1>
+          <p>Connecting to the local demo API.</p>
+        </section>
+      </main>
+    );
+  }
+
+  if (loadError || !run || !displayedStatus) {
+    return (
+      <main className="shell center-shell">
+        <section className="load-state error" role="alert">
+          <ShieldAlert size={24} aria-hidden="true" />
+          <h1>Local run API unavailable</h1>
+          <p>{loadError ?? "No run payload was returned."}</p>
+          <button type="button" className="refresh-button" disabled={isRefreshing} onClick={() => void loadRun()}>
+            <RefreshCw size={16} aria-hidden="true" />
+            {isRefreshing ? "Refreshing..." : "Refresh run"}
+          </button>
+        </section>
+      </main>
+    );
+  }
+
+  const progressLabel = progressLabelFor(displayedStatus);
+  const latestQuarantine = run.quarantinedReports[0];
 
   return (
     <main className="shell">
@@ -95,6 +150,10 @@ function App() {
           Issue #{run.issue.issueNumber}
           <ArrowUpRight size={16} aria-hidden="true" />
         </a>
+        <button type="button" className="refresh-button" disabled={isRefreshing} onClick={() => void loadRun()}>
+          <RefreshCw size={16} aria-hidden="true" />
+          {isRefreshing ? "Refreshing..." : "Refresh run"}
+        </button>
       </header>
 
       <section className="proof-strip" aria-label="Run proof tape">
@@ -102,6 +161,7 @@ function App() {
           <span>base {run.issue.baseSha}</span>
           <span>{run.currentBranch}</span>
           <span>{run.candidatePatch.hash}</span>
+          <span>generated {formatTime(run.generatedAt)}</span>
         </div>
         <strong>{progressLabel}</strong>
       </section>

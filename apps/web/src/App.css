@@ -38,6 +38,11 @@ a:focus-visible {
     linear-gradient(180deg, #fbfaf7 0%, #f4f1ec 48%, #e8ece8 100%);
 }
 
+.center-shell {
+  display: grid;
+  place-items: center;
+}
+
 .topbar,
 .proof-strip,
 .workspace {
@@ -139,6 +144,61 @@ h3 {
 .issue-link:hover {
   border-color: #182022;
   background: #ffffff;
+}
+
+.refresh-button {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 14px;
+  border: 1px solid #0f5f53;
+  background: #0f5f53;
+  color: #ffffff;
+  cursor: pointer;
+}
+
+.refresh-button:hover {
+  background: #0d4e45;
+}
+
+.refresh-button:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.load-state {
+  display: grid;
+  width: min(480px, 100%);
+  gap: 12px;
+  justify-items: start;
+  padding: 24px;
+  border: 1px solid #182022;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 6px 6px 0 #182022;
+}
+
+.load-state svg {
+  color: #0f5f53;
+}
+
+.load-state h1 {
+  font-size: 1.4rem;
+}
+
+.load-state p {
+  margin-bottom: 0;
+  color: #596561;
+  line-height: 1.45;
+}
+
+.load-state.error {
+  border-color: #b84a4a;
+}
+
+.load-state.error svg {
+  color: #b84a4a;
 }
 
 .proof-strip {
