@@ -6,8 +6,8 @@
     "outDir": "dist",
     "rootDir": "src",
     "paths": {
-      "@reprosmith/core": ["../../packages/core/src/index.js"],
-      "@reprosmith/repro-engine": ["../../packages/repro-engine/src/index.js"]
+      "@reprosmith/core": ["../../packages/core/src/index.ts"],
+      "@reprosmith/repro-engine": ["../../packages/repro-engine/src/index.ts"]
     }
   },
   "references": [{ "path": "../../packages/core" }, { "path": "../../packages/repro-engine" }],
