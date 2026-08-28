@@ -14,7 +14,8 @@
     "dev": "pnpm --filter @reprosmith/web dev",
     "lint": "pnpm -r --workspace-concurrency=1 lint",
     "test": "pnpm -r --workspace-concurrency=1 test",
-    "typecheck": "pnpm -r --workspace-concurrency=1 typecheck"
+    "typecheck": "pnpm -r --workspace-concurrency=1 typecheck",
+    "verify": "pnpm build && pnpm lint && pnpm typecheck && pnpm test && pnpm demo:e2e"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
