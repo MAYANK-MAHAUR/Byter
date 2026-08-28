@@ -24,6 +24,27 @@ describe("failure fingerprints", () => {
     });
   });
 
+  it("preserves leading slash from POSIX file URL stack locations", () => {
+    const fingerprint = extractFailureFingerprint({
+      command: "node",
+      args: [],
+      cwd: process.cwd(),
+      exitCode: 1,
+      timedOut: false,
+      durationMs: 1,
+      stdout: "",
+      stderr: "TypeError: Cannot read properties of undefined\n    at parse (file:///tmp/reprosmith/parser.js:3:11)"
+    });
+
+    expect(fingerprint).toMatchObject({
+      errorType: "TypeError",
+      file: "/tmp/reprosmith/parser.js",
+      line: 3,
+      column: 11,
+      stackFrame: "parse"
+    });
+  });
+
   it("does not match different source lines", () => {
     expect(
       matchFingerprints(

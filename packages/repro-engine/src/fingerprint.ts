@@ -75,10 +75,18 @@ function extractStackLocation(output: string): Partial<FailureFingerprint> {
 
   return {
     stackFrame: match[1]?.trim(),
-    file: match[2]?.trim(),
+    file: normalizeStackFile(match[2]?.trim() ?? "", stackLine),
     line: Number.parseInt(match[3] ?? "", 10),
     column: Number.parseInt(match[4] ?? "", 10)
   };
+}
+
+function normalizeStackFile(file: string, stackLine: string): string {
+  if (stackLine.includes("file:///") && !file.startsWith("/") && !/^[A-Za-z]:/.test(file)) {
+    return `/${file}`;
+  }
+
+  return file;
 }
 
 function normalizeMessage(message: string): string {
