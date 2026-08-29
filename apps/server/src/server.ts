@@ -344,7 +344,7 @@ async function handleLatestRun(
   }
 
   const refreshed = await refreshLegacyHarnessTrace(dataDir, latest, trueForgeRuntime);
-  const commented = await createMissingGitHubStatusComment(dataDir, refreshed, githubClient);
+  const commented = await createMissingGitHubStatusComment(dataDir, refreshed, githubClient, request);
   sendJson(response, 200, hydratePersistedPullRequest(commented));
 }
 
@@ -368,20 +368,28 @@ async function handleRun(
   }
 
   const refreshed = await refreshLegacyHarnessTrace(dataDir, record, trueForgeRuntime);
-  sendJson(response, 200, hydratePersistedPullRequest(await createMissingGitHubStatusComment(dataDir, refreshed, githubClient)));
+  sendJson(response, 200, hydratePersistedPullRequest(await createMissingGitHubStatusComment(dataDir, refreshed, githubClient, request)));
 }
 
 async function createMissingGitHubStatusComment(
   dataDir: string | undefined,
   value: unknown,
-  githubClient: GitHubRestClientLike | undefined
+  githubClient: GitHubRestClientLike | undefined,
+  request: IncomingMessage
 ): Promise<unknown> {
-  if (!dataDir || !githubClient || !isRecord(value) || !isRecord(value.run) || !isRecord(value.trueForge) || value.githubStatusComment) {
+  if (!dataDir || !githubClient || !isRecord(value) || !isRecord(value.run) || !isRecord(value.trueForge)) {
     return value;
   }
 
   const record = value as unknown as PersistedWebhookRunRecord;
-  const commented = await syncGitHubStatusComment(record, githubClient);
+  if (record.githubStatusComment && record.dashboardUrl) {
+    return record;
+  }
+
+  const withDashboard = record.dashboardUrl
+    ? record
+    : { ...record, dashboardUrl: dashboardUrlFor(request, record.run.id) };
+  const commented = await syncGitHubStatusComment(withDashboard, githubClient);
   if (commented.githubStatusComment) {
     await appendUpdatedLiveRecord(dataDir, commented);
   }
