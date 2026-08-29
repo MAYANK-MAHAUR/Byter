@@ -6,6 +6,7 @@ describe("GitHub MCP tools", () => {
     expect(listGitHubTools()).toEqual([
       expect.objectContaining({ name: "read_issue", requiresApproval: false }),
       expect.objectContaining({ name: "read_file", requiresApproval: false }),
+      expect.objectContaining({ name: "submit_reprosmith_result", requiresApproval: false }),
       expect.objectContaining({ name: "add_verified_label", requiresApproval: true }),
       expect.objectContaining({ name: "comment_on_issue", requiresApproval: true }),
       expect.objectContaining({ name: "create_fix_pull_request", requiresApproval: true })
@@ -31,6 +32,26 @@ describe("GitHub MCP tools", () => {
 
     expect(client.getIssue).toHaveBeenCalledWith("o", "r", 3);
     expect(result.content[0]?.text).toContain("\"title\": \"Bug\"");
+  });
+
+  it("accepts a proof contract without calling GitHub", async () => {
+    const client = { createIssueComment: vi.fn(), addLabels: vi.fn() };
+    const tools = createGitHubMcpTools({ client: client as never });
+
+    const result = await tools.callTool({
+      name: "submit_reprosmith_result",
+      arguments: {
+        kind: "reprosmith.result",
+        status: "blocked",
+        summary: "The sandbox runtime was unavailable.",
+        proof: { before: "not run", after: "not run", regressions: "not run", attempts: "0/3" },
+        candidatePatch: null
+      }
+    });
+
+    expect(result.content[0]?.text).toContain("\"accepted\":true");
+    expect(client.createIssueComment).not.toHaveBeenCalled();
+    expect(client.addLabels).not.toHaveBeenCalled();
   });
 
   it("blocks writes without approval", async () => {

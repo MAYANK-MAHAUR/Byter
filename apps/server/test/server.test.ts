@@ -276,7 +276,7 @@ describe("ReproSmith production server", () => {
           return [{ sequenceNumber: 1, type: "turn.done", raw: { state: { status: "done" } } }];
         }
         return [
-          { sequenceNumber: 2, type: "model.message", raw: { content: recoveryResult } },
+          { sequenceNumber: 2, type: "model.message", raw: { tool_calls: [{ function: { name: "submit_reprosmith_result", arguments: recoveryResult } }] } },
           { sequenceNumber: 3, type: "turn.done", raw: { state: { status: "done" } } }
         ];
       })
@@ -415,6 +415,7 @@ describe("ReproSmith production server", () => {
     const liveDataDir = await mkdtemp(join(tmpdir(), "reprosmith-data-"));
     await writeFile(join(staticDir, "index.html"), "<main>ReproSmith</main>", "utf8");
     const proofText = JSON.stringify({
+      kind: "reprosmith.result",
       status: "patch-ready",
       summary: "Reproduced 3/3 and passed the regression check.",
       proof: { before: "3/3 failed", after: "3/3 passed", regressions: "passed", attempts: "3/3" },

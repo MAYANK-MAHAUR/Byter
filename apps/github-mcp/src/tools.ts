@@ -53,6 +53,7 @@ export interface ApprovalContext {
 export type GitHubMcpToolName =
   | "read_issue"
   | "read_file"
+  | "submit_reprosmith_result"
   | "add_verified_label"
   | "comment_on_issue"
   | "create_fix_pull_request";
@@ -79,6 +80,11 @@ export function listGitHubTools(): Array<{ name: GitHubMcpToolName; description:
   return [
     { name: "read_issue", description: "Read a GitHub issue by owner, repo, and number.", requiresApproval: false },
     { name: "read_file", description: "Read a repository file at an optional ref.", requiresApproval: false },
+    {
+      name: "submit_reprosmith_result",
+      description: "Submit the final ReproSmith proof contract without mutating GitHub.",
+      requiresApproval: false
+    },
     { name: "add_verified_label", description: "Add reprosmith:verified after proof is complete.", requiresApproval: true },
     { name: "comment_on_issue", description: "Post a ReproSmith evidence comment.", requiresApproval: true },
     {
@@ -115,6 +121,11 @@ export function createGitHubMcpTools({ client }: GitHubMcpServerOptions) {
           const { owner, repo, path, ref } = parseReadFileArgs(call.arguments);
           const file = await client.getFile(owner, repo, path, ref);
           return textResult(JSON.stringify(file, null, 2));
+        }
+
+        case "submit_reprosmith_result": {
+          expectReproSmithResult(call.arguments);
+          return textResult(JSON.stringify({ accepted: true }));
         }
 
         case "add_verified_label": {
@@ -280,6 +291,38 @@ function parseCreatePullRequestArgs(args: Record<string, unknown>) {
     body: expectString(args.body, "body"),
     files: expectPatchFiles(args.files)
   };
+}
+
+function expectReproSmithResult(args: Record<string, unknown>): void {
+  if (args.kind !== "reprosmith.result") {
+    throw new Error("Expected kind=reprosmith.result");
+  }
+  if (
+    args.status !== "patch-ready" &&
+    args.status !== "verified" &&
+    args.status !== "not-reproduced" &&
+    args.status !== "blocked" &&
+    args.status !== "failed"
+  ) {
+    throw new Error("Expected a valid ReproSmith result status");
+  }
+  expectString(args.summary, "summary");
+  if (!args.proof || typeof args.proof !== "object" || Array.isArray(args.proof)) {
+    throw new Error("Expected proof object");
+  }
+  const proof = args.proof as Record<string, unknown>;
+  expectString(proof.before, "proof.before");
+  expectString(proof.after, "proof.after");
+  expectString(proof.regressions, "proof.regressions");
+  expectString(proof.attempts, "proof.attempts");
+  if (args.candidatePatch === null) return;
+  if (!args.candidatePatch || typeof args.candidatePatch !== "object" || Array.isArray(args.candidatePatch)) {
+    throw new Error("Expected candidatePatch object or null");
+  }
+  const patch = args.candidatePatch as Record<string, unknown>;
+  expectString(patch.title, "candidatePatch.title");
+  expectString(patch.body, "candidatePatch.body");
+  expectPatchFiles(patch.files);
 }
 
 function expectPatchFiles(value: unknown) {

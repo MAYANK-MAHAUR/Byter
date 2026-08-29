@@ -63,6 +63,7 @@ describe("ReproSmith TrueForge runtime", () => {
     expect(message).toContain("Base SHA: abc123");
     expect(message).toContain("Require the same target failure 3/3");
     expect(buildReproSmithAgentSpec(config).instructions).toContain("node-v22.14.0-linux-x64.tar.gz");
+    expect(buildReproSmithAgentSpec(config).instructions).toContain("submit_reprosmith_result");
   });
 
   it("creates a session and first turn through the TrueForge SDK shape", async () => {

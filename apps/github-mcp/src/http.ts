@@ -138,6 +138,58 @@ function inputSchemaFor(name: GitHubMcpToolName) {
           ref: { type: "string" }
         }
       };
+    case "submit_reprosmith_result":
+      return {
+        type: "object",
+        additionalProperties: false,
+        required: ["kind", "status", "summary", "proof", "candidatePatch"],
+        properties: {
+          kind: { type: "string", const: "reprosmith.result" },
+          status: {
+            type: "string",
+            enum: ["patch-ready", "verified", "not-reproduced", "blocked", "failed"]
+          },
+          summary: { type: "string" },
+          proof: {
+            type: "object",
+            additionalProperties: false,
+            required: ["before", "after", "regressions", "attempts"],
+            properties: {
+              before: { type: "string" },
+              after: { type: "string" },
+              regressions: { type: "string" },
+              attempts: { type: "string" }
+            }
+          },
+          candidatePatch: {
+            anyOf: [
+              {
+                type: "object",
+                additionalProperties: false,
+                required: ["title", "body", "files"],
+                properties: {
+                  title: { type: "string" },
+                  body: { type: "string" },
+                  files: {
+                    type: "array",
+                    minItems: 1,
+                    items: {
+                      type: "object",
+                      additionalProperties: false,
+                      required: ["path", "content"],
+                      properties: {
+                        path: { type: "string" },
+                        content: { type: "string" }
+                      }
+                    }
+                  }
+                }
+              },
+              { type: "null" }
+            ]
+          }
+        }
+      };
     case "comment_on_issue":
       return {
         type: "object",
@@ -222,6 +274,7 @@ function expectToolName(value: unknown): GitHubMcpToolName {
   if (
     value === "read_issue" ||
     value === "read_file" ||
+    value === "submit_reprosmith_result" ||
     value === "add_verified_label" ||
     value === "comment_on_issue" ||
     value === "create_fix_pull_request"

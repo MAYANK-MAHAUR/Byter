@@ -1478,7 +1478,7 @@ function mergeHarnessEvents(existing: HarnessTraceEvent[], incoming: HarnessTrac
 
 function categoryForTool(name: string): HarnessEventCategory {
   if (name === "exec" || name === "shell" || name === "run_command") return "sandbox";
-  if (name === "read_issue" || name === "read_file" || name === "add_verified_label" || name === "comment_on_issue") return "mcp";
+  if (name === "read_issue" || name === "read_file" || name === "submit_reprosmith_result" || name === "add_verified_label" || name === "comment_on_issue") return "mcp";
   if (name === "create_fix_pull_request") return "github";
   if (name.includes("subagent") || name.includes("delegate") || name === "task") return "subagent";
   return "agent";
@@ -1488,6 +1488,7 @@ function summaryForTool(name: string, args: Record<string, unknown>): string {
   if (name === "exec" || name === "shell" || name === "run_command") return "Running a command in the Daytona sandbox";
   if (name === "read_file") return `Reading ${typeof args.path === "string" ? redactHarnessText(args.path) : "a repository file"} through GitHub MCP`;
   if (name === "read_issue") return `Reading ${typeof args.issueNumber === "number" ? `issue #${args.issueNumber}` : "the GitHub issue"} through GitHub MCP`;
+  if (name === "submit_reprosmith_result") return "Submitting the ReproSmith proof contract";
   if (name === "create_fix_pull_request") return "Preparing the approved GitHub pull request write";
   if (categoryForTool(name) === "subagent") return `Delegating ${typeof args.name === "string" ? args.name : "a focused task"}`;
   return `Calling ${name}`;
@@ -1786,7 +1787,7 @@ function contentText(value: unknown): string {
       if (isRecord(part)) {
         if (typeof part.text === "string") return part.text;
         if ("content" in part) return contentText(part.content);
-        if (isRecord(part.function) && typeof part.function.arguments === "string") return part.function.arguments;
+        if (isRecord(part.function)) return contentText(part.function.arguments);
       }
       return "";
     })
@@ -1795,18 +1796,16 @@ function contentText(value: unknown): string {
 
 function parseResultJson(text: string): Record<string, unknown> | undefined {
   const candidates = balancedJsonObjects(text);
-  let patchObject: Record<string, unknown> | undefined;
   for (const candidate of candidates) {
     try {
       const parsed = JSON.parse(candidate.trim()) as unknown;
       if (!isRecord(parsed)) continue;
-      if (parsed.kind === "reprosmith.result" || isRecord(parsed.candidatePatch)) return parsed;
-      if (!patchObject && isCandidatePatchObject(parsed)) patchObject = parsed;
+      if (isReproSmithResultContract(parsed)) return parsed;
     } catch {
       // Try the next bounded candidate.
     }
   }
-  return patchObject;
+  return undefined;
 }
 
 function balancedJsonObjects(text: string): string[] {
@@ -1842,6 +1841,22 @@ function balancedJsonObjects(text: string): string[] {
 
 function isCandidatePatchObject(value: Record<string, unknown>): boolean {
   return typeof value.title === "string" && typeof value.body === "string" && Array.isArray(value.files);
+}
+
+function isReproSmithResultContract(value: Record<string, unknown>): boolean {
+  const proof = isRecord(value.proof) ? value.proof : undefined;
+  if (
+    value.kind !== "reprosmith.result" ||
+    !parseLiveResultStatus(value.status) ||
+    typeof value.summary !== "string" ||
+    !proof ||
+    !["before", "after", "regressions", "attempts"].every((key) => typeof proof[key] === "string") ||
+    !("candidatePatch" in value)
+  ) {
+    return false;
+  }
+
+  return value.candidatePatch === null || (isRecord(value.candidatePatch) && isCandidatePatchObject(value.candidatePatch));
 }
 
 function clampText(value: string, maxBytes: number): string {

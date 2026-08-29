@@ -79,7 +79,7 @@ export function buildReproSmithAgentSpec(config: TrueForgeRuntimeConfig) {
       "Require human approval before any GitHub write.",
       "Do not ask the user questions or wait for approval; this is an unattended run. If evidence is incomplete, finish with a blocked or failed result instead.",
       "Stop and report evidence when execution is blocked by security policy.",
-      "When the work is complete, return exactly one JSON object with kind=\"reprosmith.result\" as the final model message. The runtime enforces a response schema named reprosmith_result: return the object itself, not a fenced block, markdown, prose, or a tool call. Include status (patch-ready, verified, not-reproduced, blocked, or failed), summary, proof (before, after, regressions, and attempts), and candidatePatch. Set candidatePatch to null unless a concrete fix is verified; when present it must contain title, body, and files, and every file must contain the exact final path and full content. Never claim patch-ready without a reproducible before failure, a passing after check, and a regression check. After those checks pass, stop and emit the final JSON; do not rerun successful commands merely to improve output formatting. Do not call GitHub write tools; stop before mutation."
+      "When the work is complete, first call the read-only submit_reprosmith_result MCP tool with exactly one object containing kind=\"reprosmith.result\", status (patch-ready, verified, not-reproduced, blocked, or failed), summary, proof (before, after, regressions, and attempts), and candidatePatch. This tool call is the authoritative handoff and does not mutate GitHub. Set candidatePatch to null unless a concrete fix is verified; when present it must contain title, body, and files, and every file must contain the exact final path and full content. Then return the same object as the final model message with no fence or prose. Never claim patch-ready without a reproducible before failure, a passing after check, and a regression check. After those checks pass, stop; do not rerun successful commands merely to improve output formatting. Do not call GitHub write tools; stop before mutation."
     ].join("\n"),
     config: {
       iterationLimit: 64,
@@ -130,7 +130,7 @@ export function buildInitialUserMessage(input: StartReproSmithSessionInput): str
     "7. Require the same target failure 3/3 before verification.",
     "8. Prepare a complete candidatePatch with exact final file contents if the fix is verified.",
     "9. Pause before any GitHub mutation.",
-    "10. Finish with exactly one JSON object as the final response using this shape (do not wrap it in markdown):",
+    "10. Call the read-only submit_reprosmith_result MCP tool with exactly one JSON object using this shape; then finish with the same object as the final response (do not wrap it in markdown):",
     '{"kind":"reprosmith.result","status":"patch-ready","summary":"...","proof":{"before":"...","after":"...","regressions":"...","attempts":"3/3"},"candidatePatch":{"title":"...","body":"...","files":[{"path":"src/file.ts","content":"full file content"}]}}',
     "Use status=not-reproduced, blocked, or failed and set candidatePatch to null when proof is incomplete."
   ].join("\n");
@@ -142,6 +142,6 @@ export function buildProofContractRecoveryMessage(): string {
     "The runtime did not receive a valid reprosmith.result object from the previous final response.",
     "Convert only evidence actually observed in this session into exactly one raw JSON object using the enforced reprosmith_result schema.",
     "Do not invent commands, test results, files, or a patch. If the evidence is incomplete, use status=blocked or failed and candidatePatch=null.",
-    "Return the object itself with no markdown, fence, prose, or tool call."
+    "Call the read-only submit_reprosmith_result MCP tool with that exact object if it is available, then return the same object with no markdown, fence, or prose."
   ].join("\n");
 }

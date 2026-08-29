@@ -115,6 +115,10 @@ describe("GitHub MCP HTTP transport", () => {
         expect.objectContaining({
           name: "read_file",
           annotations: { readOnlyHint: true, destructiveHint: false }
+        }),
+        expect.objectContaining({
+          name: "submit_reprosmith_result",
+          annotations: { readOnlyHint: true, destructiveHint: false }
         })
       ]);
 
