@@ -25,6 +25,11 @@ function reproSmithApi(): Plugin {
           return;
         }
 
+        if (pathname === "/api/runs/latest") {
+          sendJson(response, 404, { error: "No persisted webhook runs are available in the local dev server" });
+          return;
+        }
+
         if (pathname === "/api/approvals") {
           await handleApproval(request, response);
           return;

@@ -68,7 +68,7 @@ CI evidence:
 | Reproduction verifier | VERIFIED | 3/3 same-fingerprint reproduction and flaky/not-reproduced classification are tested. |
 | Patch validation | VERIFIED | Before-fail/after-pass/regression-pass path is tested with symlink and protected-path defenses. |
 | Minimization | VERIFIED | Reproducer minimization has focused tests. |
-| Dashboard data | VERIFIED | Web reads `/api/demo-run`; no old static `demoRun` fixture remains in `apps/web/src`. |
+| Dashboard data | VERIFIED | Web prefers `/api/runs/latest` for persisted GitHub webhook runs and falls back to `/api/demo-run`; no old static `demoRun` fixture remains in `apps/web/src`. |
 | Production server | VERIFIED | `/healthz`, static dashboard, `/api/demo-run`, `/api/approvals`, and `/api/github/webhook` were probed locally on `http://127.0.0.1:4180`. |
 | Approval persistence | PARTIALLY VERIFIED | Approval receipts require bearer auth and current-run validation, then persist to JSONL with `DATA_DIR`; this is not a database. |
 | Dockerfile | PARTIALLY VERIFIED | Dockerfile and `.dockerignore` exist; local `docker --version` failed because Docker is not installed. |

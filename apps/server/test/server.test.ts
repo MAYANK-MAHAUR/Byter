@@ -80,6 +80,9 @@ describe("ReproSmith production server", () => {
   });
 
   it("verifies and records GitHub issue webhooks", async () => {
+    const emptyLatest = await fetch(`${baseUrl}/api/runs/latest`);
+    expect(emptyLatest.status).toBe(404);
+
     const payload = JSON.stringify({
       action: "opened",
       issue: {
@@ -112,6 +115,10 @@ describe("ReproSmith production server", () => {
     expect(body.run.status).toBe("triaging");
     expect(body.trueForge.status).toBe("not-configured");
     await expect(readFile(join(dataDir, "webhook-runs.jsonl"), "utf8")).resolves.toContain("Parser crash");
+
+    const latest = await fetch(`${baseUrl}/api/runs/latest`).then((latestResponse) => latestResponse.json());
+    expect(latest.deliveryId).toBe("delivery-17");
+    expect(latest.run.id).toBe(body.run.id);
   });
 
   it("starts a TrueForge session for safe signed GitHub issue webhooks", async () => {

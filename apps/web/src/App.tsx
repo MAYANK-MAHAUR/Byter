@@ -88,6 +88,11 @@ function App() {
     setApprovalError(undefined);
 
     try {
+      if (!run.candidatePatch) {
+        setApprovalError("No patch approval is available for this run yet");
+        return;
+      }
+
       const result = await submitApprovalAction({
         runId: run.id,
         actionId,
@@ -131,6 +136,7 @@ function App() {
 
   const progressLabel = progressLabelFor(displayedStatus);
   const latestQuarantine = run.quarantinedReports[0];
+  const candidatePatch = run.candidatePatch;
 
   return (
     <main className="shell">
@@ -158,9 +164,10 @@ function App() {
 
       <section className="proof-strip" aria-label="Run proof tape">
         <div>
-          <span>base {run.issue.baseSha}</span>
+          <span>{run.sourceLabel}</span>
+          <span>base {run.issue.baseSha ?? "default HEAD"}</span>
           <span>{run.currentBranch}</span>
-          <span>{run.candidatePatch.hash}</span>
+          {candidatePatch ? <span>{candidatePatch.hash}</span> : undefined}
           <span>generated {formatTime(run.generatedAt)}</span>
         </div>
         <strong>{progressLabel}</strong>
@@ -228,52 +235,70 @@ function App() {
             })}
           </div>
 
-          <section className="approval-panel" aria-label="Approval controls">
-            <div className="panel-head">
-              <div>
-                <p className="eyebrow">Approval</p>
-                <h2>{run.candidatePatch.title}</h2>
+          {candidatePatch ? (
+            <section className="approval-panel" aria-label="Approval controls">
+              <div className="panel-head">
+                <div>
+                  <p className="eyebrow">Approval</p>
+                  <h2>{candidatePatch.title}</h2>
+                </div>
+                <span className="hash-chip">
+                  <Lock size={14} aria-hidden="true" />
+                  {candidatePatch.hash}
+                </span>
               </div>
-              <span className="hash-chip">
-                <Lock size={14} aria-hidden="true" />
-                {run.candidatePatch.hash}
-              </span>
-            </div>
 
-            <ul className="file-list" aria-label="Patch files">
-              {run.candidatePatch.files.map((file) => (
-                <li key={file}>
-                  <FileCode2 size={15} aria-hidden="true" />
-                  {file}
-                </li>
-              ))}
-            </ul>
+              <ul className="file-list" aria-label="Patch files">
+                {candidatePatch.files.map((file) => (
+                  <li key={file}>
+                    <FileCode2 size={15} aria-hidden="true" />
+                    {file}
+                  </li>
+                ))}
+              </ul>
 
-            <div className={`approval-state ${approvalError ? "error" : approval ? "saved" : "idle"}`} role="status">
-              {approvalError ?? approval?.message ?? "Awaiting maintainer decision"}
-            </div>
+              <div className={`approval-state ${approvalError ? "error" : approval ? "saved" : "idle"}`} role="status">
+                {approvalError ?? approval?.message ?? "Awaiting maintainer decision"}
+              </div>
 
-            <div className="approval-actions">
-              {run.approvals.map((action) => {
-                const Icon = actionIcons[action.impact];
-                const isPending = pendingAction === action.id;
-                return (
-                  <button
-                    key={action.id}
-                    type="button"
-                    className={`action-button ${action.impact}`}
-                    disabled={pendingAction !== undefined}
-                    aria-busy={isPending}
-                    onClick={() => void handleApproval(action.id)}
-                  >
-                    <Icon size={18} aria-hidden="true" />
-                    <span>{isPending ? "Saving..." : action.label}</span>
-                    <small>{action.description}</small>
-                  </button>
-                );
-              })}
-            </div>
-          </section>
+              <div className="approval-actions">
+                {run.approvals.map((action) => {
+                  const Icon = actionIcons[action.impact];
+                  const isPending = pendingAction === action.id;
+                  return (
+                    <button
+                      key={action.id}
+                      type="button"
+                      className={`action-button ${action.impact}`}
+                      disabled={pendingAction !== undefined}
+                      aria-busy={isPending}
+                      onClick={() => void handleApproval(action.id)}
+                    >
+                      <Icon size={18} aria-hidden="true" />
+                      <span>{isPending ? "Saving..." : action.label}</span>
+                      <small>{action.description}</small>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          ) : (
+            <section className="approval-panel waiting-panel" aria-label="Run orchestration">
+              <div className="panel-head">
+                <div>
+                  <p className="eyebrow">Orchestration</p>
+                  <h2>{statusLabels[displayedStatus]}</h2>
+                </div>
+                <span className="hash-chip">
+                  <RadioTower size={14} aria-hidden="true" />
+                  {run.source}
+                </span>
+              </div>
+              <div className="approval-state idle" role="status">
+                {run.events.at(-1)?.message ?? "Run is waiting for proof"}
+              </div>
+            </section>
+          )}
         </section>
 
         <aside className="quarantine" aria-label="Security quarantine">
@@ -303,7 +328,7 @@ function App() {
           )}
           <div className="last-seen">
             <Timer size={16} aria-hidden="true" />
-            Verified {formatTime(run.candidatePatch.verifiedAt)}
+            Seen {formatTime(candidatePatch?.verifiedAt ?? run.updatedAt)}
           </div>
         </aside>
       </div>

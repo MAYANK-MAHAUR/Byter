@@ -9,6 +9,7 @@
 - Secret grep across tracked source and git history
 - Production server smoke test
 - Signed GitHub issues webhook route
+- Dashboard prefers the latest persisted webhook run and falls back to generated demo proof only when no live run exists
 - Authenticated approval receipt persistence with current-run validation
 - Delivery deduplication for GitHub webhooks
 - Optional webhook-to-TrueForge session handoff path, tested with an injected runtime
@@ -23,7 +24,7 @@
 - Wait for CI, GitGuardian, and Qodo on the audit PR.
 - Confirm final repository name: `Byter` vs `ByteHunter`.
 - Deploy ReproSmith to Railway from this branch or merged `main`.
-- Verify `/healthz`, `/api/demo-run`, and dashboard route on the Railway URL.
+- Verify `/healthz`, `/api/runs/latest`, `/api/demo-run`, and dashboard route on the Railway URL.
 - Configure the GitHub App webhook URL to `/api/github/webhook`.
 - Run one real signed GitHub issue webhook through the deployed server.
 - Confirm the deployed webhook response includes a started TrueForge session and turn.
