@@ -1499,7 +1499,8 @@ function extractLiveProofResult(events: TrueForgeRuntimeEvent[], record: Persist
     ...events
       .filter((event) => event.type === "model.message")
       .reverse()
-      .flatMap((event) => resultOutputTexts(event.raw))
+      .flatMap((event) => resultOutputTexts(event.raw)),
+    ...[...events].reverse().flatMap((event) => resultOutputTexts(event.raw))
   ];
   const parsed = outputTexts
     .map((outputText) => parseResultJson(clampText(outputText, maxResultTextBytes)))
@@ -1550,7 +1551,11 @@ function resultOutputTexts(value: unknown): string[] {
     event.output,
     event.result,
     event.content,
-    event.message
+    event.delta,
+    event.text,
+    event.message,
+    event.toolCalls,
+    event.tool_calls
   ];
 
   return candidates.map(contentText).filter((text) => text.length > 0);
@@ -1649,7 +1654,12 @@ function parseLiveResultStatus(value: unknown): LiveProofResult["status"] | unde
 }
 
 function unwrapRuntimeEvent(value: unknown): unknown {
-  return isRecord(value) && isRecord(value.event) ? value.event : value;
+  if (isRecord(value) && isRecord(value.event)) return value.event;
+  if (isRecord(value) && isRecord(value.data)) {
+    if (isRecord(value.data.event)) return value.data.event;
+    return value.data;
+  }
+  return value;
 }
 
 function contentText(value: unknown): string {
@@ -1660,6 +1670,8 @@ function contentText(value: unknown): string {
     if (typeof value.text === "string") return value.text;
     if ("content" in value) return contentText(value.content);
     if ("output" in value) return contentText(value.output);
+    if ("delta" in value) return contentText(value.delta);
+    if (isRecord(value.function) && typeof value.function.arguments === "string") return value.function.arguments;
     return "";
   }
   if (!Array.isArray(value)) {
@@ -1668,7 +1680,11 @@ function contentText(value: unknown): string {
   return value
     .map((part) => {
       if (typeof part === "string") return part;
-      if (isRecord(part) && typeof part.text === "string") return part.text;
+      if (isRecord(part)) {
+        if (typeof part.text === "string") return part.text;
+        if ("content" in part) return contentText(part.content);
+        if (isRecord(part.function) && typeof part.function.arguments === "string") return part.function.arguments;
+      }
       return "";
     })
     .join("");
