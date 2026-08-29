@@ -114,26 +114,32 @@ export class ReproSmithTrueForgeRuntime {
 }
 
 function normalizeSession(value: unknown): TrueForgeSession {
-  if (!isRecord(value) || typeof value.id !== "string") {
+  const session = unwrapData(value);
+  if (!isRecord(session) || typeof session.id !== "string") {
     throw new Error("TrueForge session response did not include an id");
   }
 
   return {
-    id: value.id,
-    title: typeof value.title === "string" ? value.title : null
+    id: session.id,
+    title: typeof session.title === "string" ? session.title : null
   };
 }
 
 function normalizeTurn(value: unknown): TrueForgeTurn {
-  if (!isRecord(value) || typeof value.id !== "string" || typeof value.sessionId !== "string") {
+  const turn = unwrapData(value);
+  if (!isRecord(turn) || typeof turn.id !== "string" || typeof turn.sessionId !== "string") {
     throw new Error("TrueForge turn response did not include ids");
   }
 
   return {
-    id: value.id,
-    sessionId: value.sessionId,
-    status: turnStatus(value.state)
+    id: turn.id,
+    sessionId: turn.sessionId,
+    status: turnStatus(turn.state)
   };
+}
+
+function unwrapData(value: unknown): unknown {
+  return isRecord(value) && "data" in value ? value.data : value;
 }
 
 function normalizeEvent(value: unknown): TrueForgeRuntimeEvent {
