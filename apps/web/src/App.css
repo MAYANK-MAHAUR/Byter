@@ -1,20 +1,20 @@
 :root {
   color-scheme: light;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background: #edf1f0;
-  color: #182426;
+  background: #f2f2f2;
+  color: #111111;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  --ink: #182426;
-  --muted: #64716f;
-  --line: #d5dfdc;
+  --ink: #111111;
+  --muted: #4a4a4a;
+  --line: #9a9a9a;
   --paper: #ffffff;
-  --mist: #edf1f0;
-  --blue: #2868d8;
-  --mint: #167b67;
-  --amber: #b87514;
-  --red: #b94e4e;
+  --mist: #f2f2f2;
+  --blue: #111111;
+  --mint: #111111;
+  --amber: #111111;
+  --red: #111111;
   --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 
@@ -261,4 +261,78 @@ h3 { margin-bottom: 0; font-size: 0.96rem; font-weight: 720; line-height: 1.34; 
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+/* Keep the console monochrome so state is carried by labels, borders, and icons. */
+.shell { filter: grayscale(1); }
+body { background: #f2f2f2; }
+a { color: #111111; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+a:visited { color: #111111; }
+
+.topbar, .run-ribbon, .harness-panel, .view-tabs, .panel { border-color: #111111; }
+.run-ribbon { background: #ffffff; }
+.ribbon-links a { color: #111111; font-weight: 750; }
+.ribbon-links a:hover { color: #ffffff; background: #111111; text-decoration: none; }
+.ribbon-links a, .ribbon-links strong { padding: 4px 6px; }
+
+.icon-button, .button, .action-button, .view-tabs button { border: 2px solid #111111; }
+.icon-button:hover, .icon-button:focus-visible, .button:hover, .button:focus-visible,
+.action-button:hover, .action-button:focus-visible, .view-tabs button:hover {
+  border-color: #111111;
+  background: #111111;
+  color: #ffffff;
+  filter: none;
+}
+.action-button:hover small, .action-button:focus-visible small { color: #e5e5e5; }
+.action-button:hover svg, .action-button:focus-visible svg { color: #ffffff !important; }
+.button-primary, .button-success { border-color: #111111; background: #111111; color: #ffffff; }
+.button-primary:hover, .button-success:hover { background: #ffffff; color: #111111; }
+.view-tabs { border: 2px solid #111111; background: #dedede; }
+.view-tabs button { border-color: transparent; }
+.view-tabs button.active { border: 2px solid #111111; background: #ffffff; color: #111111; box-shadow: none; }
+.tab-count { border: 1px solid #111111; border-radius: 0; background: #ffffff; color: #111111; }
+
+.status-pill, .status-success, .status-warning, .status-danger, .status-active {
+  border: 2px solid #111111;
+  background: #ffffff;
+  color: #111111;
+}
+.status-warning { border-style: dashed; }
+.status-danger { border-style: double; }
+.status-pill svg { fill: currentColor; }
+.live-indicator, .state-dot, .status-dot { background: #111111; box-shadow: 0 0 0 3px #d0d0d0; }
+
+.harness-panel { background: #111111; color: #ffffff; box-shadow: 5px 5px 0 #777777; }
+.session-summary, .harness-metric { border-color: #777777; background: #222222; }
+.harness-orbit, .panel-icon, .harness-metric, .session-summary { border-width: 2px; }
+.agent-rail { border-top-color: #777777; }
+
+.finding-callout, .preapproval-state, .security-banner, .empty-state, .evidence-note {
+  border: 2px solid #111111;
+  background: #f1f1f1;
+  color: #111111;
+}
+.preapproval-state, .security-banner.blocked, .evidence-note { border-style: dashed; }
+.finding-callout p, .preapproval-state span, .security-banner span { color: #444444; }
+.approval-state, .file-list li, .trace-details span, .proof-block, .trace-row, .security-finding {
+  border-color: #999999;
+}
+.file-list li, .trace-details span { background: #f7f7f7; color: #222222; }
+.trace-row { border-width: 1px 1px 1px 4px; border-left-color: #111111; background: #ffffff; }
+.trace-mcp, .trace-sandbox, .trace-subagent, .trace-github { border-left-color: #111111; }
+.trace-icon { border: 1px solid #999999; background: #eeeeee; color: #111111; }
+.trace-output { border-top-color: #999999; }
+.trace-output summary { border: 1px solid #111111; padding: 7px 8px; color: #111111; text-decoration: underline; text-underline-offset: 3px; }
+.trace-output summary:hover { background: #111111; color: #ffffff; text-decoration: none; }
+.trace-output code, .trace-output pre, .patch-body { background: #111111; color: #ffffff; }
+.trace-output pre.stderr { color: #ffffff; }
+.proof-point { border-bottom-color: #c0c0c0; }
+.proof-point > span { border: 1px solid #999999; background: #eeeeee; color: #111111; }
+.preapproval-state svg, .finding-callout svg, .security-banner svg, .approval-meta svg, .patch-meta svg, .file-list svg { color: #111111; }
+.security-finding code, .severity { color: #111111; }
+
+summary { cursor: pointer; }
+button:focus-visible, a:focus-visible, summary:focus-visible {
+  outline: 3px solid #111111;
+  outline-offset: 3px;
 }
