@@ -26,6 +26,7 @@ NEEDS_USER.md
 # Reference clones and scratch
 trueforge-repo/
 scratch/
+.railway-deploy*/
 
 # Logs
 *.log
@@ -39,4 +40,3 @@ Thumbs.db
 .idea/
 .vscode/*
 !.vscode/extensions.json
-

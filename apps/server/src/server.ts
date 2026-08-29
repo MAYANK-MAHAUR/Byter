@@ -15,6 +15,7 @@ import {
 import type {
   StartReproSmithSessionInput,
   StartReproSmithSessionResult,
+  TrueForgeTurn,
   TrueForgeRuntimeEventListener,
   TrueForgeRuntimeEvent
 } from "@reprosmith/agent";
@@ -103,6 +104,7 @@ interface HarnessTraceEvent {
 
 interface ReproSmithSessionStarter {
   startSession(input: StartReproSmithSessionInput): Promise<StartReproSmithSessionResult>;
+  requestProofContract?(sessionId: string): Promise<TrueForgeTurn>;
   subscribeToTurn?(sessionId: string, turnId: string, onEvent?: TrueForgeRuntimeEventListener): Promise<TrueForgeRuntimeEvent[]>;
   listSessionEvents?(sessionId: string): Promise<TrueForgeRuntimeEvent[]>;
 }
@@ -1239,12 +1241,37 @@ async function monitorTrueForgeTurn(
       }
     }
 
+    let completed = events.some((event) => event.type === "turn.done");
+    let result = completed ? extractLiveProofResult(events, record) : undefined;
+    if (completed && !result && trueForgeRuntime.requestProofContract) {
+      try {
+        const recoveryTurn = await trueForgeRuntime.requestProofContract(record.trueForge.session.id);
+        liveRecord = {
+          ...liveRecord,
+          trueForge: {
+            ...liveRecord.trueForge,
+            status: "started",
+            turn: recoveryTurn,
+            error: "TrueForge proof contract recovery requested"
+          }
+        };
+        await appendUpdatedLiveRecord(dataDir, liveRecord);
+        const recoveryEvents = await trueForgeRuntime.subscribeToTurn(
+          record.trueForge.session.id,
+          recoveryTurn.id,
+          persistTraceEvent
+        );
+        events = [...events, ...recoveryEvents];
+        completed = events.some((event) => event.type === "turn.done");
+        result = completed ? extractLiveProofResult(events, record) : undefined;
+      } catch (error) {
+        console.error("TrueForge proof contract recovery failed", error);
+      }
+    }
     const eventMetadata = mergeHarnessEvents(
       liveRecord.trueForge.events ?? [],
       events.flatMap((event, index) => projectTrueForgeEvent(event, index))
     );
-    const completed = events.some((event) => event.type === "turn.done");
-    const result = completed ? extractLiveProofResult(events, record) : undefined;
     let run = record.run;
     if (completed && result) {
       run = applyLiveProofResult(run, result);
@@ -1259,7 +1286,7 @@ async function monitorTrueForgeTurn(
         status: completed ? "completed" : "started",
         ...(completed
           ? result
-            ? {}
+            ? { error: undefined }
             : { error: "TrueForge completed without a valid reprosmith.result contract" }
           : { error: "TrueForge turn is still running; completion has not been observed" }),
         events: eventMetadata,

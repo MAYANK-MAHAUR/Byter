@@ -1,5 +1,9 @@
 import { TrueForge } from "@truefoundry/trueforge-sdk";
-import { buildInitialUserMessage, buildReproSmithAgentSpec } from "./reprosmith-agent.js";
+import {
+  buildInitialUserMessage,
+  buildProofContractRecoveryMessage,
+  buildReproSmithAgentSpec
+} from "./reprosmith-agent.js";
 import type {
   StartReproSmithSessionInput,
   StartReproSmithSessionResult,
@@ -71,6 +75,19 @@ export class ReproSmithTrueForgeRuntime {
     const response = await this.client.sessions.listEvents(sessionId);
     const data = isRecord(response) && Array.isArray(response.data) ? response.data : [];
     return data.map(normalizeEvent);
+  }
+
+  async requestProofContract(sessionId: string): Promise<TrueForgeTurn> {
+    return normalizeTurn(
+      await this.client.sessions.createTurn(sessionId, {
+        input: [
+          {
+            type: "user.message",
+            content: buildProofContractRecoveryMessage()
+          }
+        ]
+      })
+    );
   }
 
   async subscribeToTurn(

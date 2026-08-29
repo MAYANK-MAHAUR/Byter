@@ -250,6 +250,91 @@ describe("ReproSmith production server", () => {
     }
   });
 
+  it("recovers a missing TrueForge result contract without inventing proof", async () => {
+    const staticDir = await mkdtemp(join(tmpdir(), "reprosmith-static-"));
+    const liveDataDir = await mkdtemp(join(tmpdir(), "reprosmith-data-"));
+    await writeFile(join(staticDir, "index.html"), "<main>ReproSmith</main>", "utf8");
+    const recoveryResult = JSON.stringify({
+      kind: "reprosmith.result",
+      status: "verified",
+      summary: "The reported tokenizer failure was reproduced three times.",
+      proof: { before: "3/3 failed", after: "3/3 passed", regressions: "Focused regression passed", attempts: "3/3" },
+      candidatePatch: null
+    });
+    const trueForgeRuntime = {
+      startSession: vi.fn().mockResolvedValue({
+        session: { id: "session-recovery-1", title: null },
+        turn: { id: "turn-recovery-1", sessionId: "session-recovery-1", status: "running" }
+      }),
+      requestProofContract: vi.fn().mockResolvedValue({
+        id: "turn-recovery-2",
+        sessionId: "session-recovery-1",
+        status: "running"
+      }),
+      subscribeToTurn: vi.fn().mockImplementation(async (_sessionId: string, turnId: string) => {
+        if (turnId === "turn-recovery-1") {
+          return [{ sequenceNumber: 1, type: "turn.done", raw: { state: { status: "done" } } }];
+        }
+        return [
+          { sequenceNumber: 2, type: "model.message", raw: { content: recoveryResult } },
+          { sequenceNumber: 3, type: "turn.done", raw: { state: { status: "done" } } }
+        ];
+      })
+    };
+    const githubClient = {
+      createIssueComment: vi.fn().mockResolvedValue({ id: 702, html_url: "https://github.test/issues/22#issuecomment-702" }),
+      addLabels: vi.fn().mockResolvedValue(undefined)
+    } as any;
+    const server = createReproSmithServer({ staticDir, dataDir: liveDataDir, trueForgeRuntime, githubClient });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address() as AddressInfo;
+    const isolatedBaseUrl = `http://127.0.0.1:${address.port}`;
+    const payload = JSON.stringify({
+      action: "opened",
+      issue: {
+        number: 22,
+        title: "Parser crash with trailing escape",
+        body: "Trailing escape crashes the parser.",
+        html_url: "https://github.test/o/r/issues/22"
+      },
+      repository: {
+        name: "r",
+        full_name: "o/r",
+        default_branch: "main",
+        owner: { login: "o" }
+      }
+    });
+
+    try {
+      const response = await fetch(`${isolatedBaseUrl}/api/github/webhook`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-GitHub-Event": "issues",
+          "X-GitHub-Delivery": "delivery-recovery-22",
+          "X-Hub-Signature-256": signWebhookPayload(payload, "webhook-secret")
+        },
+        body: payload
+      });
+      expect(response.status).toBe(202);
+
+      let latest: any;
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        latest = await fetch(`${isolatedBaseUrl}/api/runs/latest`).then((latestResponse) => latestResponse.json());
+        if (latest.trueForge.status === "completed") break;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(trueForgeRuntime.requestProofContract).toHaveBeenCalledWith("session-recovery-1");
+      expect(trueForgeRuntime.subscribeToTurn).toHaveBeenCalledTimes(2);
+      expect(latest.run.status).toBe("verified");
+      expect(latest.trueForge.error).toBeUndefined();
+      expect(latest.trueForge.result.status).toBe("verified");
+      expect(githubClient.addLabels).toHaveBeenCalledWith("o", "r", 22, ["reprosmith:verified"]);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    }
+  });
+
   it("persists live proof, exposes approval, and creates a PR through approved MCP tools", async () => {
     const staticDir = await mkdtemp(join(tmpdir(), "reprosmith-static-"));
     const liveDataDir = await mkdtemp(join(tmpdir(), "reprosmith-data-"));

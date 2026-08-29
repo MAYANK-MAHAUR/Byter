@@ -3,6 +3,7 @@ import {
   ReproSmithTrueForgeRuntime,
   TrueForgeInitialTurnError,
   buildInitialUserMessage,
+  buildProofContractRecoveryMessage,
   buildReproSmithAgentSpec
 } from "../src/index.js";
 
@@ -92,6 +93,39 @@ describe("ReproSmith TrueForge runtime", () => {
       "session_1",
       expect.objectContaining({
         input: [expect.objectContaining({ type: "user.message" })]
+      })
+    );
+  });
+
+  it("requests a bounded proof contract recovery turn", async () => {
+    const client = {
+      sessions: {
+        create: vi.fn(),
+        createTurn: vi.fn().mockResolvedValue({
+          data: {
+            id: "turn_recovery",
+            sessionId: "session_1",
+            state: { status: "running" }
+          }
+        }),
+        listEvents: vi.fn()
+      }
+    };
+    const runtime = new ReproSmithTrueForgeRuntime(config, client);
+
+    await expect(runtime.requestProofContract("session_1")).resolves.toEqual({
+      id: "turn_recovery",
+      sessionId: "session_1",
+      status: "running"
+    });
+    expect(buildProofContractRecoveryMessage()).toContain("Do not call tools");
+    expect(client.sessions.createTurn).toHaveBeenCalledWith(
+      "session_1",
+      expect.objectContaining({
+        input: [expect.objectContaining({
+          type: "user.message",
+          content: expect.stringContaining("valid reprosmith.result object")
+        })]
       })
     );
   });

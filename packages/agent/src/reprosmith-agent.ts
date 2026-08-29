@@ -28,28 +28,33 @@ const reproSmithResultSchema = {
           required: ["before", "after", "regressions", "attempts"]
         },
         candidatePatch: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            title: { type: "string" },
-            body: { type: "string" },
-            files: {
-              type: "array",
-              items: {
-                type: "object",
-                additionalProperties: false,
-                properties: {
-                  path: { type: "string" },
-                  content: { type: "string" }
-                },
-                required: ["path", "content"]
-              }
-            }
-          },
-          required: ["title", "body", "files"]
+          anyOf: [
+            {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                title: { type: "string" },
+                body: { type: "string" },
+                files: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    properties: {
+                      path: { type: "string" },
+                      content: { type: "string" }
+                    },
+                    required: ["path", "content"]
+                  }
+                }
+              },
+              required: ["title", "body", "files"]
+            },
+            { type: "null" }
+          ]
         }
       },
-      required: ["kind", "status", "summary", "proof"]
+      required: ["kind", "status", "summary", "proof", "candidatePatch"]
     }
   }
 };
@@ -73,7 +78,7 @@ export function buildReproSmithAgentSpec(config: TrueForgeRuntimeConfig) {
       "Run the smallest reproducer supplied by the issue before installing the whole workspace. Do not run workspace-wide install, build, or test commands when a focused package-level reproducer is sufficient. If the required runtime cannot be installed safely or a bounded dependency install times out, report the environment as blocked; do not retry the same stalled command indefinitely.",
       "Require human approval before any GitHub write.",
       "Stop and report evidence when execution is blocked by security policy.",
-      "When the work is complete, return exactly one JSON object with kind=\"reprosmith.result\" as the final model message. The runtime enforces a response schema named reprosmith_result: return the object itself, not a fenced block, markdown, prose, or a tool call. Include status (patch-ready, verified, not-reproduced, blocked, or failed), summary, proof (before, after, regressions, and attempts), and candidatePatch only when a concrete fix is verified. candidatePatch must contain title, body, and files; every file must contain the exact final path and full content. Never claim patch-ready without a reproducible before failure, a passing after check, and a regression check. After those checks pass, stop and emit the final JSON; do not rerun successful commands merely to improve output formatting. Do not call GitHub write tools; stop before mutation."
+      "When the work is complete, return exactly one JSON object with kind=\"reprosmith.result\" as the final model message. The runtime enforces a response schema named reprosmith_result: return the object itself, not a fenced block, markdown, prose, or a tool call. Include status (patch-ready, verified, not-reproduced, blocked, or failed), summary, proof (before, after, regressions, and attempts), and candidatePatch. Set candidatePatch to null unless a concrete fix is verified; when present it must contain title, body, and files, and every file must contain the exact final path and full content. Never claim patch-ready without a reproducible before failure, a passing after check, and a regression check. After those checks pass, stop and emit the final JSON; do not rerun successful commands merely to improve output formatting. Do not call GitHub write tools; stop before mutation."
     ].join("\n"),
     config: {
       iterationLimit: 64,
@@ -119,6 +124,16 @@ export function buildInitialUserMessage(input: StartReproSmithSessionInput): str
     "9. Pause before any GitHub mutation.",
     "10. Finish with exactly one JSON object as the final response using this shape (do not wrap it in markdown):",
     '{"kind":"reprosmith.result","status":"patch-ready","summary":"...","proof":{"before":"...","after":"...","regressions":"...","attempts":"3/3"},"candidatePatch":{"title":"...","body":"...","files":[{"path":"src/file.ts","content":"full file content"}]}}',
-    "Use status=not-reproduced, blocked, or failed and omit candidatePatch when proof is incomplete."
+    "Use status=not-reproduced, blocked, or failed and set candidatePatch to null when proof is incomplete."
+  ].join("\n");
+}
+
+export function buildProofContractRecoveryMessage(): string {
+  return [
+    "Your analysis turn is complete. Do not call tools and do not perform more investigation.",
+    "The runtime did not receive a valid reprosmith.result object from the previous final response.",
+    "Convert only evidence actually observed in this session into exactly one raw JSON object using the enforced reprosmith_result schema.",
+    "Do not invent commands, test results, files, or a patch. If the evidence is incomplete, use status=blocked or failed and candidatePatch=null.",
+    "Return the object itself with no markdown, fence, prose, or tool call."
   ].join("\n");
 }
