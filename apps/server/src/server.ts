@@ -5,7 +5,11 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ReproSmithTrueForgeRuntime } from "@reprosmith/agent";
-import type { StartReproSmithSessionInput, StartReproSmithSessionResult } from "@reprosmith/agent";
+import type {
+  StartReproSmithSessionInput,
+  StartReproSmithSessionResult,
+  TrueForgeRuntimeEvent
+} from "@reprosmith/agent";
 import { createRun, scanIssueText, transitionRun } from "@reprosmith/core";
 import { runDemo, type DemoRunSummary } from "@reprosmith/demo-runner";
 import { parseIssueWebhook, verifyGitHubWebhook } from "@reprosmith/github";
@@ -25,6 +29,25 @@ export interface ReproSmithServerOptions {
 
 interface ReproSmithSessionStarter {
   startSession(input: StartReproSmithSessionInput): Promise<StartReproSmithSessionResult>;
+  subscribeToTurn?(sessionId: string, turnId: string): Promise<TrueForgeRuntimeEvent[]>;
+}
+
+interface PersistedWebhookRunRecord {
+  receivedAt: string;
+  deliveryId: string;
+  repository: string;
+  issueTitle: string;
+  issueBody: string;
+  run: ReturnType<typeof createRun>;
+  scan: ReturnType<typeof scanIssueText>;
+  trueForge: {
+    status: string;
+    reason?: string;
+    error?: string;
+    session?: { id: string; title: string | null };
+    turn?: { id: string; status: string };
+    events?: Array<{ sequenceNumber?: number; type: string }>;
+  };
 }
 
 export function createReproSmithServer(options: ReproSmithServerOptions = {}): Server {
@@ -150,7 +173,7 @@ async function handleGitHubWebhook(
   const orchestration = await startTrueForgeSessionForIssue(run, webhook, scan.safeToExecute, trueForgeRuntime);
   run = orchestration.run;
 
-  const record = {
+  const record: PersistedWebhookRunRecord = {
     receivedAt: new Date().toISOString(),
     deliveryId,
     repository: webhook.repository.full_name,
@@ -162,6 +185,9 @@ async function handleGitHubWebhook(
   };
   await mkdir(dataDir, { recursive: true });
   await appendFile(join(dataDir, "webhook-runs.jsonl"), `${JSON.stringify(record)}\n`, "utf8");
+  if (orchestration.trueForge.status === "started" && trueForgeRuntime?.subscribeToTurn) {
+    void monitorTrueForgeTurn(dataDir, record, trueForgeRuntime);
+  }
 
   sendJson(response, 202, record);
 }
@@ -460,6 +486,55 @@ async function readLatestJsonlRecord(dataDir: string, fileName: string): Promise
     return undefined;
   } finally {
     await file.close();
+  }
+}
+
+async function monitorTrueForgeTurn(
+  dataDir: string,
+  record: PersistedWebhookRunRecord,
+  trueForgeRuntime: ReproSmithSessionStarter
+): Promise<void> {
+  if (!record.trueForge.session?.id || !record.trueForge.turn?.id || !trueForgeRuntime.subscribeToTurn) {
+    return;
+  }
+
+  try {
+    const events = await trueForgeRuntime.subscribeToTurn(record.trueForge.session.id, record.trueForge.turn.id);
+    const eventMetadata = events.slice(-100).map((event) => ({
+      ...(event.sequenceNumber !== undefined ? { sequenceNumber: event.sequenceNumber } : {}),
+      type: event.type
+    }));
+    await appendFile(
+      join(dataDir, "webhook-runs.jsonl"),
+      `${JSON.stringify({
+        ...record,
+        trueForge: {
+          ...record.trueForge,
+          status: "completed",
+          events: eventMetadata
+        }
+      })}\n`,
+      "utf8"
+    );
+  } catch (error) {
+    console.error("TrueForge turn subscription failed", error);
+    let failedRun = record.run;
+    if (failedRun.status === "environment-building") {
+      failedRun = transitionRun(failedRun, "failed", "TrueForge turn monitoring failed");
+    }
+    await appendFile(
+      join(dataDir, "webhook-runs.jsonl"),
+      `${JSON.stringify({
+        ...record,
+        run: failedRun,
+        trueForge: {
+          ...record.trueForge,
+          status: "failed",
+          error: "TrueForge turn monitoring failed"
+        }
+      })}\n`,
+      "utf8"
+    );
   }
 }
 
