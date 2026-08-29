@@ -29,7 +29,7 @@ The hackathon vertical slice is complete:
 - reproduction runner with timeouts, output limits, and secret-safe environment filtering
 - failure fingerprinting, repeated verification, and input minimization
 - patch validator with protected reproducer files, symlink defense, and regression checks
-- React dashboard for run timeline, evidence, security quarantine, and approval controls
+- React dashboard for live persisted runs, evidence, security quarantine, and approval controls
 - production Node server for dashboard/API serving, receipt persistence, and Railway health checks
 - local end-to-end demo runner
 - GitHub Actions CI running the full workspace verification
@@ -58,36 +58,29 @@ awaiting-approval
 ```
 
 ## Dashboard
+Use the two-terminal setup below to run the dashboard against the real ReproSmith server.
 
-```bash
-pnpm dev
-```
+Open the Vite URL printed by the command, usually http://127.0.0.1:5173.
 
-Open the Vite URL printed by the command, usually `http://127.0.0.1:5173`.
+The dashboard is a console for the same proof path: timeline, reproduction evidence, patch validation, approval payload hash, and quarantine findings. It runs in live mode by default, so it reads persisted webhook runs and sends approval actions to the ReproSmith server.
 
-The dashboard is a local console for the same proof path: timeline, reproduction evidence, patch validation, approval payload hash, and quarantine findings.
+For a production-style local run, start the server and dashboard in separate terminals:
 
-In development, the dashboard calls the local Vite API:
-
-- `GET /api/runs/latest` returns 404 in the Vite dev server so the dashboard falls back to generated demo proof.
-- `GET /api/demo-run` executes the demo runner and returns freshly generated proof data.
-- `POST /api/approvals` records the selected approval action without mutating GitHub.
-
-For a production-style local run:
-
-```bash
+~~~powershell
 pnpm build
-PORT=3000 DATA_DIR=.data pnpm start
-```
 
-The production server exposes:
+$env:PORT="8787"
+$env:DATA_DIR=".data-local"
+$env:APPROVAL_TOKEN="local-approval"
+pnpm --filter @reprosmith/server start
+~~~
 
-- `GET /healthz` for deployment health checks.
-- `GET /api/runs/latest` for the latest persisted GitHub webhook run.
-- `POST /mcp` for the authenticated remote GitHub MCP transport.
-- `GET /api/demo-run` for freshly generated proof data.
-- `POST /api/approvals` for authenticated, run-matched, persisted approval receipts.
-- `POST /api/github/webhook` for signed, delivery-deduplicated GitHub issues webhooks. When TrueForge credentials are configured, safe issues immediately start a TrueForge session and persist the session and turn IDs with the run record.
+~~~powershell
+$env:REPROSMITH_API_TARGET="http://127.0.0.1:8787"
+pnpm dev
+~~~
+
+The Vite server proxies /api and /mcp to the real backend. Set VITE_REPROSMITH_API_URL when the web console is hosted separately from the API. To intentionally preview generated proof data, set VITE_REPROSMITH_DATA_MODE=demo; demo mode is opt-in and still calls the server's /api/demo-run endpoint.
 
 ## Environment
 
@@ -104,7 +97,9 @@ Key variables:
 - `MODEL_PROVIDER`, `MODEL_NAME`, `MODEL_BASE_URL`, `MODEL_API_KEY`
 - `TRUEFORGE_URL`, `TRUEFORGE_API_KEY`
 - `DAYTONA_API_KEY`
-- `APPROVAL_TOKEN`, `MCP_AUTH_TOKEN`, `MCP_PUBLIC_URL`
+- REPROSMITH_API_TARGET for the local Vite proxy
+- VITE_REPROSMITH_API_URL and VITE_REPROSMITH_DATA_MODE for the web console
+- APPROVAL_TOKEN, MCP_AUTH_TOKEN, MCP_PUBLIC_URL
 - `GITHUB_TOKEN` for the authenticated remote MCP transport
 - `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY`, and `GITHUB_INSTALLATION_ID` are reserved for GitHub App token exchange
 - `DATA_DIR` for server-side JSONL receipt/run persistence

@@ -72,7 +72,9 @@ After setting `TRUEFORGE_URL` and `TRUEFORGE_API_KEY`, send one signed test issu
 
 If `trueForge.status` is `not-configured`, the server accepted and persisted the webhook but did not start live orchestration.
 
-Refresh the dashboard after the signed delivery. It should show the latest persisted webhook run first; `/api/demo-run` is only the fallback when no live run exists.
+Refresh the dashboard after the signed delivery. The deployed server serves the built dashboard and its API from the same origin, so the dashboard reads /api/runs/latest and sends approvals to /api/approvals without a Vite mock layer. /api/demo-run is available only when the web build is explicitly configured with VITE_REPROSMITH_DATA_MODE=demo.
+
+For a separately hosted web build, set VITE_REPROSMITH_API_URL=https://<railway-domain> at build time. For local Vite development, set REPROSMITH_API_TARGET=http://127.0.0.1:8787 and run the production server on port 8787; the Vite server proxies API and MCP requests to it.
 
 ## Known Limits
 

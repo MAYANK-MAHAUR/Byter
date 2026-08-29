@@ -66,22 +66,31 @@ interface WebhookRunRecord {
   };
 }
 
+export function apiUrl(path: string): string {
+  const baseUrl = (import.meta.env.VITE_REPROSMITH_API_URL ?? "").trim().replace(/\/+$/, "");
+  return `${baseUrl}${path}`;
+}
+
 export async function fetchDashboardRun(fetchImpl: typeof fetch = fetch): Promise<DashboardRun> {
-  const liveResponse = await fetchImpl("/api/runs/latest", { cache: "no-store" });
-  if (liveResponse.ok) {
-    return toDashboardRunFromWebhook((await liveResponse.json()) as WebhookRunRecord);
+  if (import.meta.env.VITE_REPROSMITH_DATA_MODE === "demo") {
+    const response = await fetchImpl(apiUrl("/api/demo-run"), { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(`Demo run API returned ${response.status}`);
+    }
+
+    return toDashboardRun((await response.json()) as DemoRunSummary);
   }
 
-  if (![404, 503].includes(liveResponse.status)) {
+  const liveResponse = await fetchImpl(apiUrl("/api/runs/latest"), { cache: "no-store" });
+  if (!liveResponse.ok) {
+    if (liveResponse.status === 404) {
+      throw new Error("No persisted GitHub webhook run is available yet");
+    }
+
     throw new Error(`Live run API returned ${liveResponse.status}`);
   }
 
-  const response = await fetchImpl("/api/demo-run", { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error(`Run API returned ${response.status}`);
-  }
-
-  return toDashboardRun((await response.json()) as DemoRunSummary);
+  return toDashboardRunFromWebhook((await liveResponse.json()) as WebhookRunRecord);
 }
 
 export function toDashboardRun(summary: DemoRunSummary): DashboardRun {

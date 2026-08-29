@@ -1,5 +1,5 @@
 import type { RunStatus } from "@reprosmith/core";
-import type { ApprovalActionId } from "./data";
+import { apiUrl, type ApprovalActionId } from "./data";
 
 export interface ApprovalSubmission {
   id: string;
@@ -17,7 +17,7 @@ export async function submitApprovalAction(input: {
   actionId: ApprovalActionId;
   patchHash: string;
 }): Promise<ApprovalSubmission> {
-  const response = await fetch("/api/approvals", {
+  const response = await fetch(apiUrl("/api/approvals"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
