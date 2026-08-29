@@ -151,6 +151,25 @@ describe("ReproSmith TrueForge runtime", () => {
     ]);
   });
 
+  it("bounds oversized TrueForge event payloads before returning them", async () => {
+    const oversizedOutput = "x".repeat(2 * 1024 * 1024);
+    const client = {
+      sessions: {
+        create: vi.fn(),
+        createTurn: vi.fn(),
+        listEvents: vi.fn().mockResolvedValue({
+          data: [{ sequenceNumber: 2, event: { type: "model.message", content: oversizedOutput } }]
+        })
+      }
+    };
+    const runtime = new ReproSmithTrueForgeRuntime(config, client);
+
+    const events = await runtime.listSessionEvents("session_1");
+
+    expect(JSON.stringify(events).length).toBeLessThan(600_000);
+    expect(events[0].type).toBe("model.message");
+  });
+
   it("deletes the created session if initial turn creation fails", async () => {
     const client = {
       sessions: {

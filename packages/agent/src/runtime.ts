@@ -178,8 +178,48 @@ function normalizeEvent(value: unknown): TrueForgeRuntimeEvent {
   return {
     ...(sequenceNumber !== undefined ? { sequenceNumber } : {}),
     type,
-    raw: value
+    raw: compactEventPayload(value)
   };
+}
+
+function compactEventPayload(value: unknown): unknown {
+  const budget = { remaining: 512 * 1024 };
+  return compactValue(value, budget, 0);
+}
+
+function compactValue(value: unknown, budget: { remaining: number }, depth: number): unknown {
+  if (value === null || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const limit = Math.min(value.length, Math.max(0, budget.remaining));
+    const compacted = value.slice(0, limit);
+    budget.remaining -= compacted.length;
+    return compacted;
+  }
+  if (depth >= 8 || budget.remaining <= 0) {
+    return undefined;
+  }
+  if (Array.isArray(value)) {
+    const compacted: unknown[] = [];
+    for (const item of value.slice(0, 256)) {
+      const next = compactValue(item, budget, depth + 1);
+      if (next !== undefined) compacted.push(next);
+      if (budget.remaining <= 0) break;
+    }
+    return compacted;
+  }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const compacted: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value).slice(0, 128)) {
+    const next = compactValue(item, budget, depth + 1);
+    if (next !== undefined) compacted[key] = next;
+    if (budget.remaining <= 0) break;
+  }
+  return compacted;
 }
 
 function turnStatus(state: unknown): string {
