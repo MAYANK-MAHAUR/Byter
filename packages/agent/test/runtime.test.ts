@@ -36,13 +36,15 @@ describe("ReproSmith TrueForge runtime", () => {
         })
       }
     });
+    expect(spec.config.askUserQuestions.enabled).toBe(false);
     expect(spec.config.sandbox.enabled).toBe(true);
     expect(spec.config.dynamicSubAgents.enabled).toBe(true);
     expect(spec.mcpServers).toEqual([
       {
         name: "reprosmith-github",
         preload: true,
-        requireApprovalForTools: ["@write", "@destructive"]
+        enableTools: ["read_issue", "read_file"],
+        requireApprovalForTools: []
       }
     ]);
   });

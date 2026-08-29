@@ -82,6 +82,9 @@ export function buildReproSmithAgentSpec(config: TrueForgeRuntimeConfig) {
     ].join("\n"),
     config: {
       iterationLimit: 64,
+      askUserQuestions: {
+        enabled: false
+      },
       sandbox: {
         enabled: true,
         fileDownloads: true
@@ -94,7 +97,8 @@ export function buildReproSmithAgentSpec(config: TrueForgeRuntimeConfig) {
       {
         name: config.mcpServerName ?? "reprosmith-github",
         preload: true,
-        requireApprovalForTools: ["@write", "@destructive"]
+        enableTools: ["read_issue", "read_file"],
+        requireApprovalForTools: []
       }
     ]
   };
