@@ -876,11 +876,16 @@ function extractLiveProofResult(events: TrueForgeRuntimeEvent[], record: Persist
   const output = state && isRecord(state.output) ? state.output : undefined;
   const outputText = clampText(output ? contentText(output.content) : "", maxResultTextBytes);
   const parsed = parseResultJson(outputText);
-  if (!parsed || parsed.kind !== "reprosmith.result") {
+  if (!parsed) {
     return undefined;
   }
 
-  const status = parseLiveResultStatus(parsed.status);
+  const rawCandidatePatch = isRecord(parsed.candidatePatch)
+    ? parsed.candidatePatch
+    : isCandidatePatchObject(parsed)
+      ? parsed
+      : undefined;
+  const status = parseLiveResultStatus(parsed.status) ?? (rawCandidatePatch ? "patch-ready" : undefined);
   if (!status) {
     return undefined;
   }
@@ -895,7 +900,7 @@ function extractLiveProofResult(events: TrueForgeRuntimeEvent[], record: Persist
       }
     : undefined;
   const candidatePatch = status === "patch-ready" || status === "verified"
-    ? normalizeCandidatePatch(parsed.candidatePatch, record, summary)
+    ? normalizeCandidatePatch(rawCandidatePatch, record, summary)
     : undefined;
 
   return {
@@ -1019,22 +1024,54 @@ function contentText(value: unknown): string {
 }
 
 function parseResultJson(text: string): Record<string, unknown> | undefined {
-  const candidates: string[] = [];
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenced?.[1]) candidates.push(fenced[1]);
-  const firstBrace = text.indexOf("{");
-  const lastBrace = text.lastIndexOf("}");
-  if (firstBrace >= 0 && lastBrace > firstBrace) candidates.push(text.slice(firstBrace, lastBrace + 1));
-
+  const candidates = balancedJsonObjects(text);
+  let patchObject: Record<string, unknown> | undefined;
   for (const candidate of candidates) {
     try {
       const parsed = JSON.parse(candidate.trim()) as unknown;
-      if (isRecord(parsed)) return parsed;
+      if (!isRecord(parsed)) continue;
+      if (parsed.kind === "reprosmith.result" || isRecord(parsed.candidatePatch)) return parsed;
+      if (!patchObject && isCandidatePatchObject(parsed)) patchObject = parsed;
     } catch {
       // Try the next bounded candidate.
     }
   }
-  return undefined;
+  return patchObject;
+}
+
+function balancedJsonObjects(text: string): string[] {
+  const objects: string[] = [];
+  for (let start = 0; start < text.length; start += 1) {
+    if (text[start] !== "{") continue;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let index = start; index < text.length; index += 1) {
+      const character = text[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (character === "\\") escaped = true;
+        else if (character === '"') inString = false;
+        continue;
+      }
+      if (character === '"') {
+        inString = true;
+      } else if (character === "{") {
+        depth += 1;
+      } else if (character === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          objects.push(text.slice(start, index + 1));
+          break;
+        }
+      }
+    }
+  }
+  return objects;
+}
+
+function isCandidatePatchObject(value: Record<string, unknown>): boolean {
+  return typeof value.title === "string" && typeof value.body === "string" && Array.isArray(value.files);
 }
 
 function clampText(value: string, maxBytes: number): string {

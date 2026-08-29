@@ -221,9 +221,9 @@ describe("ReproSmith production server", () => {
                   {
                     type: "text",
                     text: [
+                      "Proof complete. Candidate patch follows:",
                       "```json",
                       JSON.stringify({
-                        kind: "reprosmith.result",
                         status: "patch-ready",
                         summary: "Reproduced 3/3 and passed the regression check.",
                         proof: { before: "3/3 failed", after: "3/3 passed", regressions: "passed", attempts: "3/3" },
