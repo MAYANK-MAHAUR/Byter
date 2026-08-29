@@ -275,7 +275,53 @@ async function handleLatestRun(
     return;
   }
 
-  sendJson(response, 200, latest);
+  sendJson(response, 200, hydratePersistedPullRequest(latest));
+}
+
+function hydratePersistedPullRequest(value: unknown): unknown {
+  if (!isRecord(value) || !isRecord(value.run) || value.run.status !== "pr-created" || !isRecord(value.trueForge)) {
+    return value;
+  }
+
+  const result = isRecord(value.trueForge.result) ? value.trueForge.result : {};
+  if (isPullRequest(result.pullRequest)) {
+    return value;
+  }
+
+  const events = Array.isArray(value.run.events) ? value.run.events : [];
+  const eventEvidence = [...events]
+    .reverse()
+    .map((event) => (isRecord(event) && isRecord(event.evidence) ? event.evidence : undefined))
+    .find((evidence) => isPullRequestEvidence(evidence));
+  const fromEvent = eventEvidence && isPullRequestEvidence(eventEvidence)
+    ? { number: eventEvidence.pullRequestNumber, url: eventEvidence.pullRequestUrl }
+    : undefined;
+  const summary = typeof result.summary === "string" ? result.summary : "";
+  const fromSummary = summary.match(/Draft PR created:\s+(https:\/\/github\.com\/[^\s]+)/)?.[1];
+  const pullRequest = fromEvent ?? (fromSummary ? { number: Number(fromSummary.match(/\/pull\/(\d+)(?:\?|$)/)?.[1]), url: fromSummary } : undefined);
+
+  if (!isPullRequest(pullRequest)) {
+    return value;
+  }
+
+  return {
+    ...value,
+    trueForge: {
+      ...value.trueForge,
+      result: { ...result, pullRequest }
+    }
+  };
+}
+
+function isPullRequestEvidence(value: Record<string, unknown> | undefined): value is Record<string, unknown> & {
+  pullRequestNumber: number;
+  pullRequestUrl: string;
+} {
+  return value !== undefined && typeof value.pullRequestNumber === "number" && typeof value.pullRequestUrl === "string";
+}
+
+function isPullRequest(value: unknown): value is { number: number; url: string } {
+  return isRecord(value) && typeof value.number === "number" && Number.isInteger(value.number) && value.number > 0 && typeof value.url === "string";
 }
 
 async function startTrueForgeSessionForIssue(
