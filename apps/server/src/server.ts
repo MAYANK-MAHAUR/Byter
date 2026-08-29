@@ -153,7 +153,13 @@ export function createReproSmithServer(options: ReproSmithServerOptions = {}): S
       }
 
       if (url.pathname === "/api/runs/latest") {
-        await handleLatestRun(request, response, dataDir ? resolve(dataDir) : undefined, trueForgeRuntime);
+        await handleLatestRun(
+          request,
+          response,
+          dataDir ? resolve(dataDir) : undefined,
+          trueForgeRuntime,
+          githubClient
+        );
         return;
       }
 
@@ -163,7 +169,8 @@ export function createReproSmithServer(options: ReproSmithServerOptions = {}): S
           response,
           dataDir ? resolve(dataDir) : undefined,
           decodeRunId(url.pathname),
-          trueForgeRuntime
+          trueForgeRuntime,
+          githubClient
         );
         return;
       }
@@ -317,7 +324,8 @@ async function handleLatestRun(
   request: IncomingMessage,
   response: ServerResponse,
   dataDir: string | undefined,
-  trueForgeRuntime: ReproSmithSessionStarter | undefined
+  trueForgeRuntime: ReproSmithSessionStarter | undefined,
+  githubClient: GitHubRestClientLike | undefined
 ): Promise<void> {
   if (request.method !== "GET") {
     sendJson(response, 405, { error: "Method not allowed" });
@@ -335,7 +343,9 @@ async function handleLatestRun(
     return;
   }
 
-  sendJson(response, 200, hydratePersistedPullRequest(await refreshLegacyHarnessTrace(dataDir, latest, trueForgeRuntime)));
+  const refreshed = await refreshLegacyHarnessTrace(dataDir, latest, trueForgeRuntime);
+  const commented = await createMissingGitHubStatusComment(dataDir, refreshed, githubClient);
+  sendJson(response, 200, hydratePersistedPullRequest(commented));
 }
 
 async function handleRun(
@@ -343,7 +353,8 @@ async function handleRun(
   response: ServerResponse,
   dataDir: string | undefined,
   runId: string,
-  trueForgeRuntime: ReproSmithSessionStarter | undefined
+  trueForgeRuntime: ReproSmithSessionStarter | undefined,
+  githubClient: GitHubRestClientLike | undefined
 ): Promise<void> {
   if (request.method !== "GET") {
     sendJson(response, 405, { error: "Method not allowed" });
@@ -356,7 +367,25 @@ async function handleRun(
     return;
   }
 
-  sendJson(response, 200, hydratePersistedPullRequest(await refreshLegacyHarnessTrace(dataDir, record, trueForgeRuntime)));
+  const refreshed = await refreshLegacyHarnessTrace(dataDir, record, trueForgeRuntime);
+  sendJson(response, 200, hydratePersistedPullRequest(await createMissingGitHubStatusComment(dataDir, refreshed, githubClient)));
+}
+
+async function createMissingGitHubStatusComment(
+  dataDir: string | undefined,
+  value: unknown,
+  githubClient: GitHubRestClientLike | undefined
+): Promise<unknown> {
+  if (!dataDir || !githubClient || !isRecord(value) || !isRecord(value.run) || !isRecord(value.trueForge) || value.githubStatusComment) {
+    return value;
+  }
+
+  const record = value as unknown as PersistedWebhookRunRecord;
+  const commented = await syncGitHubStatusComment(record, githubClient);
+  if (commented.githubStatusComment) {
+    await appendUpdatedLiveRecord(dataDir, commented);
+  }
+  return commented;
 }
 
 function decodeRunId(pathname: string): string {
