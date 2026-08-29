@@ -124,7 +124,7 @@ function App() {
         <section className="load-state" aria-live="polite">
           <RefreshCw size={22} aria-hidden="true" />
           <h1>Loading ReproSmith run</h1>
-          <p>Connecting to the local demo API.</p>
+          <p>Connecting to the ReproSmith API.</p>
         </section>
       </main>
     );
@@ -135,7 +135,7 @@ function App() {
       <main className="shell center-shell">
         <section className="load-state error" role="alert">
           <ShieldAlert size={24} aria-hidden="true" />
-          <h1>Local run API unavailable</h1>
+          <h1>ReproSmith API unavailable</h1>
           <p>{loadError ?? "No run payload was returned."}</p>
           <button type="button" className="refresh-button" disabled={isRefreshing} onClick={() => void loadRun()}>
             <RefreshCw size={16} aria-hidden="true" />
