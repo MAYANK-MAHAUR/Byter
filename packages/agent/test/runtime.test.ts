@@ -61,6 +61,7 @@ describe("ReproSmith TrueForge runtime", () => {
     expect(message).toContain("Repository: MAYANK-MAHAUR/Byter");
     expect(message).toContain("Base SHA: abc123");
     expect(message).toContain("Require the same target failure 3/3");
+    expect(message).toContain("node-v22.14.0-linux-x64.tar.xz");
   });
 
   it("creates a session and first turn through the TrueForge SDK shape", async () => {
