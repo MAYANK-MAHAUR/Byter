@@ -23,7 +23,13 @@ export function buildReproSmithAgentSpec(config: TrueForgeRuntimeConfig) {
         enabled: true
       }
     },
-    mcpServers: [{ name: "reprosmith-github" }]
+    mcpServers: [
+      {
+        name: config.mcpServerName ?? "reprosmith-github",
+        preload: true,
+        requireApprovalForTools: ["@write", "@destructive"]
+      }
+    ]
   };
 }
 

@@ -11,10 +11,13 @@ NODE_ENV=production
 PORT=3000
 DATA_DIR=/data
 APPROVAL_TOKEN=<secret>
+MCP_AUTH_TOKEN=<secret>
+MCP_PUBLIC_URL=https://<railway-domain>
 MODEL_PROVIDER=agentrouter
 MODEL_NAME=glm-5.3
 MODEL_BASE_URL=https://agentrouter.org/v1
 MODEL_API_KEY=<secret>
+GITHUB_TOKEN=<GitHub installation token or scoped token>
 TRUEFORGE_URL=<deployed-trueforge-url>
 TRUEFORGE_API_KEY=<secret>
 DAYTONA_API_KEY=<secret>
@@ -76,3 +79,14 @@ Refresh the dashboard after the signed delivery. It should show the latest persi
 The production server currently persists approval and webhook records as JSONL files under `DATA_DIR`. Use a mounted volume for demos. For longer-running production, replace this with Postgres or another durable store.
 
 The deployed TrueForge service must handle AgentRouter's required Cline-compatible request headers on model-provider calls.
+
+## TrueForge MCP setup
+
+Configure the deployed TrueForge service with a remote MCP server named `reprosmith-github`:
+
+```text
+URL: https://<railway-domain>/mcp
+Authorization: Bearer <MCP_AUTH_TOKEN>
+```
+
+The ReproSmith agent spec attaches that configured name and requires approval for write and destructive tools. Verify `POST /mcp` with an authenticated `initialize` and `tools/list` call before sending a real issue.

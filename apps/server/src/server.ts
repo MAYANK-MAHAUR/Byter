@@ -5,6 +5,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ReproSmithTrueForgeRuntime } from "@reprosmith/agent";
+import { createGitHubMcpHttpHandler } from "@reprosmith/github-mcp";
 import type {
   StartReproSmithSessionInput,
   StartReproSmithSessionResult,
@@ -12,7 +13,7 @@ import type {
 } from "@reprosmith/agent";
 import { createRun, scanIssueText, transitionRun } from "@reprosmith/core";
 import { runDemo, type DemoRunSummary } from "@reprosmith/demo-runner";
-import { parseIssueWebhook, verifyGitHubWebhook } from "@reprosmith/github";
+import { GitHubRestClient, parseIssueWebhook, verifyGitHubWebhook } from "@reprosmith/github";
 
 type ApprovalActionId = "approve-pr" | "request-diff" | "reject-run";
 const maxRequestBodyBytes = 64 * 1024;
@@ -25,7 +26,10 @@ export interface ReproSmithServerOptions {
   staticDir?: string;
   dataDir?: string;
   trueForgeRuntime?: ReproSmithSessionStarter;
+  mcpHandler?: McpRequestHandler;
 }
+
+type McpRequestHandler = (request: IncomingMessage, response: ServerResponse) => Promise<void>;
 
 interface ReproSmithSessionStarter {
   startSession(input: StartReproSmithSessionInput): Promise<StartReproSmithSessionResult>;
@@ -54,6 +58,7 @@ export function createReproSmithServer(options: ReproSmithServerOptions = {}): S
   const staticDir = resolve(options.staticDir ?? process.env.STATIC_DIR ?? defaultStaticDir());
   const dataDir = options.dataDir ?? process.env.DATA_DIR;
   const trueForgeRuntime = options.trueForgeRuntime ?? trueForgeRuntimeFromEnv();
+  const mcpHandler = options.mcpHandler ?? githubMcpHandlerFromEnv();
 
   return createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
@@ -71,6 +76,15 @@ export function createReproSmithServer(options: ReproSmithServerOptions = {}): S
 
       if (url.pathname === "/api/runs/latest") {
         await handleLatestRun(request, response, dataDir ? resolve(dataDir) : undefined);
+        return;
+      }
+
+      if (url.pathname === "/mcp") {
+        if (!mcpHandler) {
+          sendJson(response, 503, { error: "MCP endpoint is not configured" });
+          return;
+        }
+        await mcpHandler(request, response);
         return;
       }
 
@@ -613,6 +627,19 @@ class HttpError extends Error {
   }
 }
 
+function githubMcpHandlerFromEnv(): McpRequestHandler | undefined {
+  const githubToken = process.env.GITHUB_TOKEN;
+  const mcpAuthToken = process.env.MCP_AUTH_TOKEN;
+  if (!githubToken || !mcpAuthToken) {
+    return undefined;
+  }
+
+  return createGitHubMcpHttpHandler({
+    client: new GitHubRestClient({ token: githubToken }),
+    authToken: mcpAuthToken
+  });
+}
+
 function trueForgeRuntimeFromEnv(): ReproSmithSessionStarter | undefined {
   const baseUrl = process.env.TRUEFORGE_URL;
   const token = process.env.TRUEFORGE_API_KEY;
@@ -624,7 +651,8 @@ function trueForgeRuntimeFromEnv(): ReproSmithSessionStarter | undefined {
     baseUrl,
     token,
     modelName: process.env.MODEL_NAME ?? "glm-5.3",
-    modelProvider: process.env.MODEL_PROVIDER ?? "agentrouter"
+    modelProvider: process.env.MODEL_PROVIDER ?? "agentrouter",
+    mcpServerName: process.env.TRUEFORGE_MCP_SERVER_NAME ?? "reprosmith-github"
   });
 }
 

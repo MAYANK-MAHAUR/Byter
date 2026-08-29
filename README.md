@@ -84,6 +84,7 @@ The production server exposes:
 
 - `GET /healthz` for deployment health checks.
 - `GET /api/runs/latest` for the latest persisted GitHub webhook run.
+- `POST /mcp` for the authenticated remote GitHub MCP transport.
 - `GET /api/demo-run` for freshly generated proof data.
 - `POST /api/approvals` for authenticated, run-matched, persisted approval receipts.
 - `POST /api/github/webhook` for signed, delivery-deduplicated GitHub issues webhooks. When TrueForge credentials are configured, safe issues immediately start a TrueForge session and persist the session and turn IDs with the run record.
@@ -103,7 +104,9 @@ Key variables:
 - `MODEL_PROVIDER`, `MODEL_NAME`, `MODEL_BASE_URL`, `MODEL_API_KEY`
 - `TRUEFORGE_URL`, `TRUEFORGE_API_KEY`
 - `DAYTONA_API_KEY`
-- `APPROVAL_TOKEN`, `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`
+- `APPROVAL_TOKEN`, `MCP_AUTH_TOKEN`, `MCP_PUBLIC_URL`
+- `GITHUB_TOKEN` for the authenticated remote MCP transport
+- `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY`, and `GITHUB_INSTALLATION_ID` are reserved for GitHub App token exchange
 - `DATA_DIR` for server-side JSONL receipt/run persistence
 
 When using AgentRouter through a deployed TrueForge service, make sure that service sends AgentRouter's required request headers.
@@ -140,3 +143,6 @@ pnpm dev
 ## Status
 
 Built as a fresh hackathon implementation for the TrueForge Agent Harness Hackathon.
+
+
+To connect TrueForge to the live GitHub tools, configure its `reprosmith-github` MCP server with the Railway `${MCP_PUBLIC_URL}/mcp` URL and a header auth value of `Authorization: Bearer <MCP_AUTH_TOKEN>`. The TrueForge agent spec requires write-tool approval before the remote transport invokes a mutation.

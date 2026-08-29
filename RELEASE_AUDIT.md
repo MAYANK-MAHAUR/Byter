@@ -8,7 +8,7 @@ Base remote observed: `https://github.com/MAYANK-MAHAUR/Byter.git`
 
 Status: PARTIALLY VERIFIED
 
-ReproSmith is no longer just a static mock dashboard. The repository now has a production Node server, live local API data, signed GitHub issues webhook intake, optional webhook-to-TrueForge session handoff, persisted approval receipts, and an approval-gated MCP tool that can create a fix branch and draft pull request when wired to a real GitHub App installation.
+ReproSmith is no longer just a static mock dashboard. The repository now has a production Node server, live local API data, signed GitHub issues webhook intake, optional webhook-to-TrueForge session handoff, persisted approval receipts, an authenticated remote MCP transport, and an approval-gated MCP tool that can create a fix branch and draft pull request when wired to GitHub credentials.
 
 It is not honestly production-complete yet. Live TrueForge execution, AgentRouter header behavior inside the deployed TrueForge fork, Daytona sandbox execution, Railway deployment, and a real GitHub issue -> webhook -> TrueForge session -> draft PR run were not verified in this audit environment.
 
@@ -60,21 +60,21 @@ CI evidence:
 | Security scanner | VERIFIED | Tests cover ordinary issue, credential exfiltration, destructive shell, Windows format command, and prompt injection detection. |
 | GitHub webhook verification | VERIFIED | HMAC verification tests pass; production server route rejects invalid signatures. |
 | GitHub webhook intake route | VERIFIED | `POST /api/github/webhook` accepts signed `issues` events, scans text, transitions to `triaging`, `environment-building`, `failed`, or `rejected`, and persists JSONL when `DATA_DIR` is set. |
-| GitHub MCP reads | VERIFIED | `read_issue` and `read_file` are tested through a narrow client boundary. |
-| GitHub MCP writes | PARTIALLY VERIFIED | Label/comment/draft-PR tools require payload-specific approval hashes and pass mocked-client tests. Live GitHub mutation was not run. |
+| GitHub MCP reads | VERIFIED | `read_issue` and `read_file` are tested through a narrow client boundary and exposed through the authenticated JSON-RPC `/mcp` transport. |
+| GitHub MCP writes | PARTIALLY VERIFIED | Label/comment/draft-PR tools require payload-specific approval hashes, are exposed through `/mcp`, and pass mocked-client plus protocol tests. Live GitHub mutation was not run. |
 | Draft PR creation primitive | VERIFIED | GitHub client can get base branch, create one Git tree/commit, point a branch at that commit, open a draft PR, and clean up the branch if PR creation fails; tests assert REST paths and payloads. |
-| TrueForge adapter | PARTIALLY VERIFIED | SDK adapter builds agent specs with sandbox/subagents/MCP and creates sessions in mocked SDK tests. Production webhook handoff to TrueForge is tested with an injected runtime. No live TrueForge session was created. |
+| TrueForge adapter | PARTIALLY VERIFIED | SDK adapter builds agent specs with sandbox/subagents/MCP, preloads the configured GitHub MCP server, requires write approval, and creates sessions in mocked SDK tests. Production webhook handoff is tested with an injected runtime. No live TrueForge session was created. |
 | AgentRouter header compatibility | PARTIALLY VERIFIED | Direct AgentRouter smoke request with `User-Agent: Cline/3.0.0` succeeded. Could not verify the deployed TrueForge fork sends that header internally. |
 | Reproduction verifier | VERIFIED | 3/3 same-fingerprint reproduction and flaky/not-reproduced classification are tested. |
 | Patch validation | VERIFIED | Before-fail/after-pass/regression-pass path is tested with symlink and protected-path defenses. |
 | Minimization | VERIFIED | Reproducer minimization has focused tests. |
 | Dashboard data | VERIFIED | Web prefers `/api/runs/latest` for persisted GitHub webhook runs and falls back to `/api/demo-run`; no old static `demoRun` fixture remains in `apps/web/src`. |
-| Production server | VERIFIED | `/healthz`, static dashboard, `/api/demo-run`, `/api/approvals`, and `/api/github/webhook` were probed locally on `http://127.0.0.1:4180`. |
+| Production server | VERIFIED | `/healthz`, static dashboard, `/api/demo-run`, `/api/runs/latest`, `/api/approvals`, and `/api/github/webhook` were probed locally on `http://127.0.0.1:4180`. |
 | Approval persistence | PARTIALLY VERIFIED | Approval receipts require bearer auth and current-run validation, then persist to JSONL with `DATA_DIR`; this is not a database. |
 | Dockerfile | PARTIALLY VERIFIED | Dockerfile and `.dockerignore` exist; local `docker --version` failed because Docker is not installed. |
 | Railway config | PARTIALLY VERIFIED | `railway.json` uses Dockerfile builder and `/healthz`; no live Railway deployment was performed. |
 | Daytona sandbox | BLOCKED BY USER ACTION | No Daytona API key or live sandbox execution was available. Local command runner is tested. |
-| Qodo | PARTIALLY VERIFIED | Prior PR #12 had Qodo review with no actionable issues. This audit branch still needs a PR review after push. |
+| Qodo | PARTIALLY VERIFIED | Qodo found no actionable issues on PRs #13 and #14; later reviews are billing-blocked after the trial ended. |
 | Secrets | VERIFIED | `.env.local` is ignored. Tracked-source grep and git-history grep for common key patterns returned no matches. |
 
 ## Production Server Evidence
@@ -114,6 +114,7 @@ These cannot be honestly verified from this local workspace without external sta
 - Deployed TrueForge Railway URL and API token.
 - Proof that deployed TrueForge sends AgentRouter's required Cline-compatible `User-Agent` header internally.
 - Daytona API key and live sandbox session.
+- GitHub token or GitHub App installation credentials for the remote `/mcp` transport.
 - GitHub App installation on the final target repository.
 - A real target GitHub issue to drive through webhook -> TrueForge -> proof -> approval -> draft PR.
 - Docker runtime on this machine, or a remote build log from Railway.
