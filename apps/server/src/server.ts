@@ -418,25 +418,27 @@ async function refreshLegacyHarnessTrace(
     ? value.trueForge.session.id
     : undefined;
   const currentEvents = Array.isArray(value.trueForge.events) ? value.trueForge.events : [];
-  if (!session || currentEvents.some((event) => isRecord(event) && typeof event.category === "string")) {
+  const hasRichTrace = currentEvents.some((event) => isRecord(event) && typeof event.category === "string");
+  const needsMetadata = typeof value.trueForge.model !== "string" || typeof value.trueForge.provider !== "string";
+  if (!session || (!needsMetadata && hasRichTrace)) {
     return value;
   }
 
   try {
-    const events = await trueForgeRuntime.listSessionEvents(session);
-    const projected = events.flatMap((event) => projectTrueForgeEvent(event));
-    if (projected.length === 0) return value;
+    const events = hasRichTrace ? [] : await trueForgeRuntime.listSessionEvents(session);
+    const projected = hasRichTrace ? [] : events.flatMap((event) => projectTrueForgeEvent(event));
+    if (!hasRichTrace && projected.length === 0 && !needsMetadata) return value;
     const updated = {
       ...value,
       trueForge: {
         ...value.trueForge,
         ...(typeof value.trueForge.model === "string"
           ? {}
-          : { model: process.env.MODEL_NAME ?? "configured model" }),
+          : { model: process.env.MODEL_NAME ?? "TrueForge configured model" }),
         ...(typeof value.trueForge.provider === "string"
           ? {}
-          : { provider: process.env.MODEL_PROVIDER ?? "configured provider" }),
-        events: mergeHarnessEvents([], projected)
+          : { provider: process.env.MODEL_PROVIDER ?? "agentrouter" }),
+        ...(hasRichTrace ? {} : { events: mergeHarnessEvents([], projected) })
       }
     } as PersistedWebhookRunRecord;
     await appendUpdatedLiveRecord(dataDir, updated);
