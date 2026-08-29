@@ -132,7 +132,7 @@ describe("ReproSmith production server", () => {
       }),
       subscribeToTurn: vi.fn().mockResolvedValue([
         { sequenceNumber: 1, type: "turn.started", raw: { secret: "do-not-persist" } },
-        { sequenceNumber: 2, type: "turn.completed", raw: { output: "proof ready" } }
+        { sequenceNumber: 2, type: "turn.done", raw: { output: "proof ready" } }
       ])
     };
     const server = createReproSmithServer({ staticDir, dataDir: liveDataDir, trueForgeRuntime });
@@ -191,7 +191,7 @@ describe("ReproSmith production server", () => {
       expect(latest.trueForge.status).toBe("completed");
       expect(latest.trueForge.events).toEqual([
         { sequenceNumber: 1, type: "turn.started" },
-        { sequenceNumber: 2, type: "turn.completed" }
+        { sequenceNumber: 2, type: "turn.done" }
       ]);
       expect(JSON.stringify(latest)).not.toContain("do-not-persist");
       await expect(readFile(join(liveDataDir, "webhook-runs.jsonl"), "utf8")).resolves.toContain("session-live-1");

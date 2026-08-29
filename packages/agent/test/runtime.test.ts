@@ -46,11 +46,13 @@ describe("ReproSmith TrueForge runtime", () => {
   it("creates a session and first turn through the TrueForge SDK shape", async () => {
     const client = {
       sessions: {
-        create: vi.fn().mockResolvedValue({ id: "session_1", title: null }),
+        create: vi.fn().mockResolvedValue({ data: { id: "session_1", title: null } }),
         createTurn: vi.fn().mockResolvedValue({
-          id: "turn_1",
-          sessionId: "session_1",
-          state: { status: "running" }
+          data: {
+            id: "turn_1",
+            sessionId: "session_1",
+            state: { status: "running" }
+          }
         }),
         listEvents: vi.fn()
       }

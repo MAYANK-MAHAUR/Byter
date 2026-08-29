@@ -34,6 +34,7 @@ type McpRequestHandler = (request: IncomingMessage, response: ServerResponse) =>
 interface ReproSmithSessionStarter {
   startSession(input: StartReproSmithSessionInput): Promise<StartReproSmithSessionResult>;
   subscribeToTurn?(sessionId: string, turnId: string): Promise<TrueForgeRuntimeEvent[]>;
+  listSessionEvents?(sessionId: string): Promise<TrueForgeRuntimeEvent[]>;
 }
 
 interface PersistedWebhookRunRecord {
@@ -489,18 +490,39 @@ async function readLatestJsonlRecord(dataDir: string, fileName: string): Promise
     await file.read(buffer, 0, length, start);
 
     const lines = buffer.toString("utf8").split("\n").filter(Boolean);
-    for (let index = lines.length - 1; index >= 0; index -= 1) {
+    let latest: unknown;
+    let latestReceivedAt = Number.NEGATIVE_INFINITY;
+    for (const line of lines) {
       try {
-        return JSON.parse(lines[index]) as unknown;
+        const candidate = JSON.parse(line) as unknown;
+        const receivedAt = receivedAtTimestamp(candidate);
+        if (latest === undefined || receivedAt >= latestReceivedAt) {
+          latest = candidate;
+          latestReceivedAt = receivedAt;
+        }
       } catch {
-        continue;
+        // Ignore a partial or malformed trailing line.
       }
     }
 
-    return undefined;
+    return latest;
   } finally {
     await file.close();
   }
+}
+
+function receivedAtTimestamp(value: unknown): number {
+  if (typeof value !== "object" || value === null) {
+    return Number.NEGATIVE_INFINITY;
+  }
+
+  const receivedAt = (value as { receivedAt?: unknown }).receivedAt;
+  if (typeof receivedAt !== "string") {
+    return Number.NEGATIVE_INFINITY;
+  }
+
+  const timestamp = Date.parse(receivedAt);
+  return Number.isFinite(timestamp) ? timestamp : Number.NEGATIVE_INFINITY;
 }
 
 async function monitorTrueForgeTurn(
@@ -513,18 +535,45 @@ async function monitorTrueForgeTurn(
   }
 
   try {
-    const events = await trueForgeRuntime.subscribeToTurn(record.trueForge.session.id, record.trueForge.turn.id);
+    let events: TrueForgeRuntimeEvent[];
+    let streamError: unknown;
+    try {
+      events = await trueForgeRuntime.subscribeToTurn(record.trueForge.session.id, record.trueForge.turn.id);
+    } catch (error) {
+      streamError = error;
+      if (!trueForgeRuntime.listSessionEvents) {
+        throw error;
+      }
+      events = [];
+    }
+
+    if (streamError !== undefined || !events.some((event) => event.type === "turn.done")) {
+      if (!trueForgeRuntime.listSessionEvents) {
+        throw streamError ?? new Error("TrueForge turn stream ended before turn.done");
+      }
+
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        events = await trueForgeRuntime.listSessionEvents(record.trueForge.session.id);
+        if (events.some((event) => event.type === "turn.done")) {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10_000));
+      }
+    }
+
     const eventMetadata = events.slice(-100).map((event) => ({
       ...(event.sequenceNumber !== undefined ? { sequenceNumber: event.sequenceNumber } : {}),
       type: event.type
     }));
+    const completed = events.some((event) => event.type === "turn.done");
     await appendFile(
       join(dataDir, "webhook-runs.jsonl"),
       `${JSON.stringify({
         ...record,
         trueForge: {
           ...record.trueForge,
-          status: "completed",
+          status: completed ? "completed" : "started",
+          ...(completed ? {} : { error: "TrueForge turn is still running; completion has not been observed" }),
           events: eventMetadata
         }
       })}\n`,
