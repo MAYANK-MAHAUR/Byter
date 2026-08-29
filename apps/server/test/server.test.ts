@@ -335,6 +335,81 @@ describe("ReproSmith production server", () => {
     }
   });
 
+  it("refreshes persisted TrueForge events when the stream omits the final output", async () => {
+    const staticDir = await mkdtemp(join(tmpdir(), "reprosmith-static-"));
+    const liveDataDir = await mkdtemp(join(tmpdir(), "reprosmith-data-"));
+    await writeFile(join(staticDir, "index.html"), "<main>ReproSmith</main>", "utf8");
+    const recoveryResult = JSON.stringify({
+      kind: "reprosmith.result",
+      status: "verified",
+      summary: "The persisted terminal output contains the verified proof.",
+      proof: { before: "3/3 failed", after: "3/3 passed", regressions: "Focused regression passed", attempts: "3/3" },
+      candidatePatch: null
+    });
+    const trueForgeRuntime = {
+      startSession: vi.fn().mockResolvedValue({
+        session: { id: "session-refresh-1", title: null },
+        turn: { id: "turn-refresh-1", sessionId: "session-refresh-1", status: "running" }
+      }),
+      subscribeToTurn: vi.fn().mockResolvedValue([
+        { sequenceNumber: 1, type: "turn.done", raw: { state: { status: "done", output: null } } }
+      ]),
+      listSessionEvents: vi.fn().mockResolvedValue([
+        { sequenceNumber: 2, type: "turn.done", raw: { state: { status: "done", output: { content: recoveryResult } } } }
+      ])
+    };
+    const githubClient = {
+      createIssueComment: vi.fn().mockResolvedValue({ id: 703, html_url: "https://github.test/issues/23#issuecomment-703" }),
+      addLabels: vi.fn().mockResolvedValue(undefined)
+    } as any;
+    const server = createReproSmithServer({ staticDir, dataDir: liveDataDir, trueForgeRuntime, githubClient });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address() as AddressInfo;
+    const isolatedBaseUrl = `http://127.0.0.1:${address.port}`;
+    const payload = JSON.stringify({
+      action: "opened",
+      issue: {
+        number: 23,
+        title: "Persisted proof output",
+        body: "The terminal output is only available through the session event list.",
+        html_url: "https://github.test/o/r/issues/23"
+      },
+      repository: {
+        name: "r",
+        full_name: "o/r",
+        default_branch: "main",
+        owner: { login: "o" }
+      }
+    });
+
+    try {
+      const response = await fetch(`${isolatedBaseUrl}/api/github/webhook`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-GitHub-Event": "issues",
+          "X-GitHub-Delivery": "delivery-refresh-23",
+          "X-Hub-Signature-256": signWebhookPayload(payload, "webhook-secret")
+        },
+        body: payload
+      });
+      expect(response.status).toBe(202);
+
+      let latest: any;
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        latest = await fetch(`${isolatedBaseUrl}/api/runs/latest`).then((latestResponse) => latestResponse.json());
+        if (latest.trueForge.status === "completed") break;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(trueForgeRuntime.listSessionEvents).toHaveBeenCalledWith("session-refresh-1");
+      expect(latest.run.status).toBe("verified");
+      expect(latest.trueForge.result.status).toBe("verified");
+      expect(githubClient.addLabels).toHaveBeenCalledWith("o", "r", 23, ["reprosmith:verified"]);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    }
+  });
+
   it("persists live proof, exposes approval, and creates a PR through approved MCP tools", async () => {
     const staticDir = await mkdtemp(join(tmpdir(), "reprosmith-static-"));
     const liveDataDir = await mkdtemp(join(tmpdir(), "reprosmith-data-"));

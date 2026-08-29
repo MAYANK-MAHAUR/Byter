@@ -1243,6 +1243,20 @@ async function monitorTrueForgeTurn(
 
     let completed = events.some((event) => event.type === "turn.done");
     let result = completed ? extractLiveProofResult(events, record) : undefined;
+    if (completed && !result && trueForgeRuntime.listSessionEvents) {
+      try {
+        const persistedEvents = await trueForgeRuntime.listSessionEvents(record.trueForge.session.id);
+        if (persistedEvents.length > 0) {
+          events = [...events, ...persistedEvents];
+          for (const event of persistedEvents) {
+            await persistTraceEvent(event);
+          }
+          result = extractLiveProofResult(events, record);
+        }
+      } catch (error) {
+        console.error("TrueForge persisted event refresh failed", error);
+      }
+    }
     if (completed && !result && trueForgeRuntime.requestProofContract) {
       try {
         const recoveryTurn = await trueForgeRuntime.requestProofContract(record.trueForge.session.id);
@@ -1511,8 +1525,8 @@ function redactHarnessText(value: string): string {
 }
 
 function extractLiveProofResult(events: TrueForgeRuntimeEvent[], record: PersistedWebhookRunRecord): LiveProofResult | undefined {
-  const done = [...events].reverse().find((event) => event.type === "turn.done");
-  if (!done) {
+  const doneEvents = events.filter((event) => event.type === "turn.done").reverse();
+  if (doneEvents.length === 0) {
     return undefined;
   }
 
@@ -1521,7 +1535,7 @@ function extractLiveProofResult(events: TrueForgeRuntimeEvent[], record: Persist
     .flatMap((event) => resultOutputTexts(event.raw))
     .join("");
   const outputTexts = [
-    ...resultOutputTexts(done.raw),
+    ...doneEvents.flatMap((event) => resultOutputTexts(event.raw)),
     ...(streamedDeltaText ? [streamedDeltaText] : []),
     ...events
       .filter((event) => event.type === "model.message")
