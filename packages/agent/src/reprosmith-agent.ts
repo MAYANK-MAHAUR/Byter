@@ -1,10 +1,65 @@
 import type { StartReproSmithSessionInput, TrueForgeRuntimeConfig } from "./types.js";
 
+const reproSmithResultSchema = {
+  type: "json_schema" as const,
+  jsonSchema: {
+    name: "reprosmith_result",
+    description: "Executable evidence and, only when verified, a complete candidate patch.",
+    strict: true,
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        kind: { type: "string", const: "reprosmith.result" },
+        status: {
+          type: "string",
+          enum: ["patch-ready", "verified", "not-reproduced", "blocked", "failed"]
+        },
+        summary: { type: "string" },
+        proof: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            before: { type: "string" },
+            after: { type: "string" },
+            regressions: { type: "string" },
+            attempts: { type: "string" }
+          },
+          required: ["before", "after", "regressions", "attempts"]
+        },
+        candidatePatch: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            title: { type: "string" },
+            body: { type: "string" },
+            files: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  path: { type: "string" },
+                  content: { type: "string" }
+                },
+                required: ["path", "content"]
+              }
+            }
+          },
+          required: ["title", "body", "files"]
+        }
+      },
+      required: ["kind", "status", "summary", "proof"]
+    }
+  }
+};
+
 export function buildReproSmithAgentSpec(config: TrueForgeRuntimeConfig) {
   return {
     model: {
       name: `${config.modelProvider ?? "custom"}/${config.modelName}`
     },
+    responseFormat: reproSmithResultSchema,
     instructions: [
       "You are ReproSmith, CI for bug reports.",
       "Do not mark a bug verified from model confidence.",
@@ -18,7 +73,7 @@ export function buildReproSmithAgentSpec(config: TrueForgeRuntimeConfig) {
       "Run the smallest reproducer supplied by the issue before installing the whole workspace. Do not run workspace-wide install, build, or test commands when a focused package-level reproducer is sufficient. If the required runtime cannot be installed safely or a bounded dependency install times out, report the environment as blocked; do not retry the same stalled command indefinitely.",
       "Require human approval before any GitHub write.",
       "Stop and report evidence when execution is blocked by security policy.",
-      "When the work is complete, return exactly one JSON object in a fenced json block with kind=\"reprosmith.result\". Include status (patch-ready, verified, not-reproduced, blocked, or failed), summary, proof (before, after, regressions, and attempts when known), and candidatePatch only when a concrete fix is verified. candidatePatch must contain title, body, and files; every file must contain the exact final path and full content. Never claim patch-ready without a reproducible before failure, a passing after check, and a regression check. After those checks pass, stop and emit the final JSON; do not rerun successful commands merely to improve output formatting. Do not call GitHub write tools; stop before mutation."
+      "When the work is complete, return exactly one JSON object with kind=\"reprosmith.result\" as the final model message. The runtime enforces a response schema named reprosmith_result: return the object itself, not a fenced block, markdown, prose, or a tool call. Include status (patch-ready, verified, not-reproduced, blocked, or failed), summary, proof (before, after, regressions, and attempts), and candidatePatch only when a concrete fix is verified. candidatePatch must contain title, body, and files; every file must contain the exact final path and full content. Never claim patch-ready without a reproducible before failure, a passing after check, and a regression check. After those checks pass, stop and emit the final JSON; do not rerun successful commands merely to improve output formatting. Do not call GitHub write tools; stop before mutation."
     ].join("\n"),
     config: {
       iterationLimit: 64,
@@ -62,7 +117,7 @@ export function buildInitialUserMessage(input: StartReproSmithSessionInput): str
     "7. Require the same target failure 3/3 before verification.",
     "8. Prepare a complete candidatePatch with exact final file contents if the fix is verified.",
     "9. Pause before any GitHub mutation.",
-    "10. Finish with exactly one fenced JSON object using this shape:",
+    "10. Finish with exactly one JSON object as the final response using this shape (do not wrap it in markdown):",
     '{"kind":"reprosmith.result","status":"patch-ready","summary":"...","proof":{"before":"...","after":"...","regressions":"...","attempts":"3/3"},"candidatePatch":{"title":"...","body":"...","files":[{"path":"src/file.ts","content":"full file content"}]}}',
     "Use status=not-reproduced, blocked, or failed and omit candidatePatch when proof is incomplete."
   ].join("\n");

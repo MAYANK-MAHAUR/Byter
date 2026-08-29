@@ -1682,6 +1682,9 @@ function contentText(value: unknown): string {
     if ("output" in value) return contentText(value.output);
     if ("delta" in value) return contentText(value.delta);
     if (isRecord(value.function) && typeof value.function.arguments === "string") return value.function.arguments;
+    if (value.kind === "reprosmith.result" || isRecord(value.candidatePatch) || isCandidatePatchObject(value)) {
+      return JSON.stringify(value);
+    }
     return "";
   }
   if (!Array.isArray(value)) {

@@ -25,6 +25,16 @@ describe("ReproSmith TrueForge runtime", () => {
     const spec = buildReproSmithAgentSpec(config);
 
     expect(spec.model.name).toBe("agentrouter/glm-5.3");
+    expect(spec.responseFormat).toMatchObject({
+      type: "json_schema",
+      jsonSchema: {
+        name: "reprosmith_result",
+        strict: true,
+        schema: expect.objectContaining({
+          required: expect.arrayContaining(["kind", "status", "summary", "proof"])
+        })
+      }
+    });
     expect(spec.config.sandbox.enabled).toBe(true);
     expect(spec.config.dynamicSubAgents.enabled).toBe(true);
     expect(spec.mcpServers).toEqual([
