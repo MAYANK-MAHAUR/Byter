@@ -1900,7 +1900,8 @@ function githubMcpHandlerFromEnv(githubClient: GitHubRestClientLike | undefined)
 
   return createGitHubMcpHttpHandler({
     client: githubClient,
-    authToken: mcpAuthToken
+    authToken: mcpAuthToken,
+    readOnly: true
   });
 }
 

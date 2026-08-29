@@ -97,7 +97,7 @@ export function buildReproSmithAgentSpec(config: TrueForgeRuntimeConfig) {
       {
         name: config.mcpServerName ?? "reprosmith-github",
         preload: true,
-        enableTools: ["read_issue", "read_file"],
+        enableTools: ["@read-only"],
         requireApprovalForTools: []
       }
     ]

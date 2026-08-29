@@ -43,7 +43,7 @@ describe("ReproSmith TrueForge runtime", () => {
       {
         name: "reprosmith-github",
         preload: true,
-        enableTools: ["read_issue", "read_file"],
+        enableTools: ["@read-only"],
         requireApprovalForTools: []
       }
     ]);
