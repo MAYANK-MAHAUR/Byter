@@ -19,7 +19,7 @@
 - Approval-gated GitHub MCP write tools
 - Draft PR creation primitive using one Git tree/commit plus branch cleanup on PR failure
 - Bounded TrueForge harness trace projection with redacted output
-- Run-specific dashboard route and GitHub status comment lifecycle
+- Run-specific dashboard route and GitHub progress comment lifecycle
 - Issue form with explicit `reprosmith:run` trigger support
 
 ## Before Public Demo
@@ -37,7 +37,7 @@
 - Verify Daytona sandbox creation if Daytona is part of the demo path.
 - Approve one payload-specific GitHub MCP write and confirm a draft PR appears.
 - Refresh the permanent run URL while the run is active and after approval.
-- Confirm the same GitHub status comment is edited, not duplicated.
+- Confirm each meaningful lifecycle update creates a new GitHub progress comment; no prior comment is edited.
 - Confirm the Harness trace contains only bounded, redacted evidence.
 
 ## Do Not Claim Until Verified

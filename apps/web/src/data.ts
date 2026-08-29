@@ -63,6 +63,8 @@ export interface HarnessState {
   subagents: number;
   dashboardUrl?: string;
   statusCommentUrl?: string;
+  commentHistory: Array<{ id?: number; url: string; kind: "started" | "completed" | "failed" | "approval" | "legacy"; createdAt: string }>;
+  verifiedLabel?: { name: string; appliedAt?: string; error?: string };
 }
 
 export interface DashboardRun extends ReproRun {
@@ -99,6 +101,8 @@ interface WebhookRunRecord {
   issueBody: string;
   dashboardUrl?: string;
   githubStatusComment?: { id?: number; url: string };
+  githubComments?: Array<{ id?: number; url: string; kind: "started" | "completed" | "failed" | "approval"; createdAt: string }>;
+  verifiedLabel?: { name: "reprosmith:verified"; appliedAt?: string; error?: string };
   run: ReproRun;
   scan: SecurityScanResult;
   trueForge?: {
@@ -260,6 +264,8 @@ export function toDashboardRunFromWebhook(record: WebhookRunRecord): DashboardRu
   const trueForgeBlocked = trueForgeStatus === "failed" || trueForgeStatus === "not-configured" || liveResult?.status === "failed";
   const issueBodySize = new Blob([record.issueBody]).size;
   const trace = record.trueForge?.events ?? [];
+  const commentHistory = record.githubComments ?? (record.githubStatusComment ? [{ ...record.githubStatusComment, kind: "legacy" as const, createdAt: record.receivedAt }] : []);
+  const latestComment = commentHistory.at(-1);
 
   return {
     ...record.run,
@@ -297,7 +303,9 @@ export function toDashboardRunFromWebhook(record: WebhookRunRecord): DashboardRu
       sandboxExecutions: trace.filter((event) => event.category === "sandbox" && (event.command || event.sandboxId || event.stdout || event.stderr)).length,
       subagents: trace.filter((event) => event.category === "subagent").length,
       dashboardUrl: record.dashboardUrl,
-      statusCommentUrl: record.githubStatusComment?.url
+      statusCommentUrl: latestComment?.url,
+      commentHistory,
+      verifiedLabel: record.verifiedLabel
     },
     evidence: [
       {
@@ -460,7 +468,8 @@ function buildDemoHarness(summary: DemoRunSummary): HarnessState {
     trace,
     mcpCalls: trace.filter((event) => event.category === "mcp").length,
     sandboxExecutions: trace.filter((event) => event.category === "sandbox" && event.command).length,
-    subagents: 0
+    subagents: 0,
+    commentHistory: []
   };
 }
 

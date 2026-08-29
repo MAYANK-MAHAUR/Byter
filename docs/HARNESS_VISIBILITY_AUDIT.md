@@ -33,7 +33,7 @@ come from the Railway deployment and the real test issue `#22`.
 | Session identity | Session and turn IDs are stored, but they are not presented as a first-class harness surface with provider and connection state. |
 | Subagents | Dynamic subagents are enabled in the agent configuration, but delegation is not required, persisted as a visible event, or proven in the dashboard. |
 | Approval checkpoint | The server enters `awaiting-approval` after the proof turn completes and gates the PR write. This is a backend checkpoint, not yet a genuine TrueForge pause/resume turn. |
-| GitHub status UX | The `comment_on_issue` MCP tool exists, but the webhook lifecycle does not create or update one status comment containing the permanent dashboard URL. |
+| GitHub progress UX | The `comment_on_issue` MCP tool exists, and the webhook lifecycle creates append-only progress comments containing the permanent dashboard URL. |
 | Run addressing | The dashboard primarily shows the latest run rather than a stable `/runs/:runId` view backed by a run-specific API route. |
 | Evidence views | Proof, candidate patch, scan findings, and events are present in one basic page, but there are no dedicated Reproduction, Patch, Security, Why Verified, or Harness Trace views. |
 | GitHub mutation trace | The final branch, commit, and PR receipt are persisted after approval, but the UI does not render the GitHub action sequence alongside the model and sandbox actions. |
@@ -58,7 +58,7 @@ but they must be labeled as demo or test data in the product and documentation.
 - Incremental persistence and API exposure of that event projection, including reconnect behavior.
 - A first-class TrueForge harness panel showing model/provider, session and turn, current task, agent states, MCP calls, sandbox activity, and evidence counts from actual events.
 - A dedicated trace view with readable event rows and expandable, redacted evidence rather than private chain-of-thought.
-- A single GitHub bot status comment created at investigation start and updated in place through completion, approval, rejection, and failure.
+- Append-only GitHub bot progress comments created at investigation start, completion, approval, rejection, and failure.
 - A permanent dashboard URL embedded in that comment and a run-specific dashboard route.
 - A clear approval-paused state with the pre-approval GitHub state, plus explicit post-approval branch, commit, and PR evidence.
 - Genuine TrueForge approval resume semantics, or an explicitly documented boundary if the server remains the approval executor.
@@ -71,7 +71,7 @@ but they must be labeled as demo or test data in the product and documentation.
 
 1. Define and persist a bounded, redacted harness trace projection from real TrueForge events.
 2. Stream trace updates into the persisted run record and expose both latest and run-specific APIs.
-3. Add the GitHub status-comment lifecycle and permanent run URL without exposing secrets or model reasoning.
+3. Add the GitHub progress-comment lifecycle and permanent run URL without exposing secrets or model reasoning.
 4. Revamp the dashboard around a readable harness panel, trace tabs, evidence tabs, approval state, and post-approval receipt.
 5. Make delegation and approval semantics observable and label any remaining backend boundary honestly.
 6. Add the issue trigger template and update README, architecture, Railway, and demo documentation.

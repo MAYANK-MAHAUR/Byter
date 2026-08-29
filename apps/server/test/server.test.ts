@@ -17,6 +17,8 @@ describe("ReproSmith production server", () => {
     process.env.APPROVAL_TOKEN = "approval-token";
     delete process.env.TRUEFORGE_URL;
     delete process.env.TRUEFORGE_API_KEY;
+    delete process.env.REPROSMITH_REQUIRE_TRIGGER_LABEL;
+    delete process.env.REPROSMITH_TRIGGER_LABEL;
     const staticDir = await mkdtemp(join(tmpdir(), "reprosmith-static-"));
     dataDir = await mkdtemp(join(tmpdir(), "reprosmith-data-"));
     await writeFile(join(staticDir, "index.html"), "<main>ReproSmith</main>", "utf8");
@@ -33,6 +35,8 @@ describe("ReproSmith production server", () => {
     delete process.env.APPROVAL_TOKEN;
     delete process.env.TRUEFORGE_URL;
     delete process.env.TRUEFORGE_API_KEY;
+    delete process.env.REPROSMITH_REQUIRE_TRIGGER_LABEL;
+    delete process.env.REPROSMITH_TRIGGER_LABEL;
     await closeServer();
   });
 
@@ -121,6 +125,39 @@ describe("ReproSmith production server", () => {
     expect(latest.run.id).toBe(body.run.id);
   });
 
+  it("starts on a deliberate label event but ignores later edits with the standing label", async () => {
+    process.env.REPROSMITH_REQUIRE_TRIGGER_LABEL = "true";
+    const issue = {
+      number: 18,
+      title: "Parser crash",
+      body: "Trailing escape crashes the parser.",
+      html_url: "https://github.test/o/r/issues/18",
+      labels: [{ name: "reprosmith:run" }]
+    };
+    const repository = { name: "r", full_name: "o/r", default_branch: "main", owner: { login: "o" } };
+    const sendWebhook = async (action: string, deliveryId: string) => {
+      const payload = JSON.stringify({ action, issue, repository });
+      return fetch(`${baseUrl}/api/github/webhook`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-GitHub-Event": "issues",
+          "X-GitHub-Delivery": deliveryId,
+          "X-Hub-Signature-256": signWebhookPayload(payload, "webhook-secret")
+        },
+        body: payload
+      });
+    };
+
+    const labeledResponse = await sendWebhook("labeled", "delivery-label-18");
+    expect(labeledResponse.status).toBe(202);
+    expect((await labeledResponse.json()).ignored).not.toBe(true);
+
+    const editedResponse = await sendWebhook("edited", "delivery-edit-18");
+    expect(editedResponse.status).toBe(202);
+    expect(await editedResponse.json()).toMatchObject({ ignored: true });
+  });
+
   it("starts a TrueForge session for safe signed GitHub issue webhooks", async () => {
     const staticDir = await mkdtemp(join(tmpdir(), "reprosmith-static-"));
     const liveDataDir = await mkdtemp(join(tmpdir(), "reprosmith-data-"));
@@ -135,7 +172,11 @@ describe("ReproSmith production server", () => {
         { sequenceNumber: 2, type: "turn.done", raw: { output: "proof ready" } }
       ])
     };
-    const server = createReproSmithServer({ staticDir, dataDir: liveDataDir, trueForgeRuntime });
+    const githubClient = {
+      createIssueComment: vi.fn().mockResolvedValue({ id: 701, html_url: "https://github.test/issues/20#issuecomment-701" }),
+      addLabels: vi.fn().mockResolvedValue(undefined)
+    } as any;
+    const server = createReproSmithServer({ staticDir, dataDir: liveDataDir, trueForgeRuntime, githubClient });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address() as AddressInfo;
     const isolatedBaseUrl = `http://127.0.0.1:${address.port}`;
@@ -189,6 +230,8 @@ describe("ReproSmith production server", () => {
         await new Promise((resolve) => setTimeout(resolve, 5));
       }
       expect(latest.trueForge.status).toBe("completed");
+      expect(latest.run.status).toBe("failed");
+      expect(latest.trueForge.error).toContain("valid reprosmith.result contract");
       expect(latest.trueForge.events).toHaveLength(2);
       expect(latest.trueForge.events.map((event: { type: string }) => event.type)).toEqual(["turn.started", "turn.done"]);
       expect(latest.trueForge.events[0]).toMatchObject({
@@ -198,6 +241,9 @@ describe("ReproSmith production server", () => {
         source: "trueforge"
       });
       expect(JSON.stringify(latest)).not.toContain("do-not-persist");
+      expect(githubClient.createIssueComment).toHaveBeenCalledTimes(2);
+      expect(githubClient.createIssueComment.mock.calls[1]?.[3]).toContain("No genuine proof contract was returned");
+      expect(githubClient.addLabels).not.toHaveBeenCalled();
       await expect(readFile(join(liveDataDir, "webhook-runs.jsonl"), "utf8")).resolves.toContain("session-live-1");
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
@@ -214,36 +260,36 @@ describe("ReproSmith production server", () => {
         turn: { id: "turn-proof-1", sessionId: "session-proof-1", status: "running" }
       }),
       subscribeToTurn: vi.fn().mockResolvedValue([
-        { sequenceNumber: 1, type: "turn.done", raw: {
+        { sequenceNumber: 1, type: "model.message", raw: {
+          event: {
+            type: "model.message",
+            content: [
+              {
+                type: "text",
+                text: [
+                  "Proof complete. Candidate patch follows:",
+                  "```json",
+                  JSON.stringify({
+                    status: "patch-ready",
+                    summary: "Reproduced 3/3 and passed the regression check.",
+                    proof: { before: "3/3 failed", after: "3/3 passed", regressions: "passed", attempts: "3/3" },
+                    candidatePatch: {
+                      title: "Fix parser crash",
+                      body: "Verified by ReproSmith.",
+                      baseBranch: "main",
+                      files: [{ path: "src/parser.ts", content: "export const fixed = true;\n" }]
+                    }
+                  }),
+                  "```"
+                ].join("\n")
+              }
+            ]
+          }
+        } },
+        { sequenceNumber: 2, type: "turn.done", raw: {
           event: {
             type: "turn.done",
-            state: {
-              status: "done",
-              output: {
-                type: "model.message",
-                content: [
-                  {
-                    type: "text",
-                    text: [
-                      "Proof complete. Candidate patch follows:",
-                      "```json",
-                      JSON.stringify({
-                        status: "patch-ready",
-                        summary: "Reproduced 3/3 and passed the regression check.",
-                        proof: { before: "3/3 failed", after: "3/3 passed", regressions: "passed", attempts: "3/3" },
-                        candidatePatch: {
-                          title: "Fix parser crash",
-                          body: "Verified by ReproSmith.",
-                          baseBranch: "main",
-                          files: [{ path: "src/parser.ts", content: "export const fixed = true;\n" }]
-                        }
-                      }),
-                      "```"
-                    ].join("\n")
-                  }
-                ]
-              }
-            }
+            state: { status: "done" }
           }
         } }
       ])
@@ -253,7 +299,8 @@ describe("ReproSmith production server", () => {
     }) };
     const githubClient = {
       createIssueComment: vi.fn().mockResolvedValue({ id: 700, html_url: "https://github.test/issues/21#issuecomment-700" }),
-      updateIssueComment: vi.fn().mockResolvedValue({ id: 700, html_url: "https://github.test/issues/21#issuecomment-700" })
+      addLabels: vi.fn().mockResolvedValue(undefined),
+      updateIssueComment: vi.fn()
     } as any;
     const server = createReproSmithServer({ staticDir, dataDir: liveDataDir, trueForgeRuntime, githubTools, githubClient });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -296,13 +343,13 @@ describe("ReproSmith production server", () => {
       }
       expect(latest.run.status).toBe("awaiting-approval");
       expect(latest.trueForge.result.candidatePatch.files[0].path).toBe("src/parser.ts");
-      expect(githubClient.createIssueComment).toHaveBeenCalledTimes(1);
-      expect(githubClient.updateIssueComment).toHaveBeenCalledWith(
-        "o",
-        "r",
-        700,
-        expect.stringContaining(`/runs/${encodeURIComponent(latest.run.id)}`)
-      );
+      expect(latest.githubComments).toHaveLength(2);
+      expect(latest.verifiedLabel.name).toBe("reprosmith:verified");
+      expect(githubClient.createIssueComment).toHaveBeenCalledTimes(2);
+      expect(githubClient.createIssueComment.mock.calls[1]?.[3]).toContain("### Remedy");
+      expect(githubClient.createIssueComment.mock.calls[1]?.[3]).toContain("Verified label: `reprosmith:verified` added");
+      expect(githubClient.updateIssueComment).not.toHaveBeenCalled();
+      expect(githubClient.addLabels).toHaveBeenCalledWith("o", "r", 21, ["reprosmith:verified"]);
       const runRecord = await fetch(`${isolatedBaseUrl}/api/runs/${encodeURIComponent(latest.run.id)}`).then((runResponse) => runResponse.json());
       expect(runRecord.run.id).toBe(latest.run.id);
 
@@ -338,8 +385,8 @@ describe("ReproSmith production server", () => {
       const finalRun = await fetch(`${isolatedBaseUrl}/api/runs/latest`).then((latestResponse) => latestResponse.json());
       expect(finalRun.run.status).toBe("pr-created");
       expect(finalRun.trueForge.result.pullRequest).toEqual({ number: 42, url: "https://github.test/pull/42" });
-      expect(githubClient.updateIssueComment).toHaveBeenCalledTimes(2);
-      expect(githubClient.updateIssueComment.mock.calls.at(-1)?.[3]).toContain("Draft PR created");
+      expect(githubClient.createIssueComment).toHaveBeenCalledTimes(3);
+      expect(githubClient.createIssueComment.mock.calls.at(-1)?.[3]).toContain("Draft PR created");
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     }

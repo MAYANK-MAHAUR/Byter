@@ -8,7 +8,7 @@ ReproSmith server
   - HMAC verification and delivery deduplication
   - issue security scan
   - run JSONL persistence
-  - one status comment per issue run
+  - append-only progress comments and a proof-gated verified label per issue run
         |
         v
 TrueForge session and turn
@@ -44,11 +44,12 @@ console root and `/api/runs/:runId` for permanent run links.
 
 Reproduction and patch validation happen before repository mutation. A live
 candidate patch enters `awaiting-approval`; the dashboard shows the pre-write
-state and the GitHub status comment says that no branch or pull request exists.
+state and the GitHub progress comment says that no branch or pull request exists.
 The authenticated approval API validates the run ID and payload hash before
 calling the `create_fix_pull_request` MCP tool. The resulting branch, commit,
-and draft PR receipt are stored with the run and the same GitHub comment is
-updated.
+and draft PR receipt are stored with the run and a new GitHub progress comment
+is added. After complete proof, the server also applies the
+`reprosmith:verified` label through the configured GitHub client.
 
 The current implementation uses a server-side approval checkpoint and an
 approved MCP tool call. It does not claim that the initial proof turn itself

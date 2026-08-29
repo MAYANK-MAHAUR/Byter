@@ -87,7 +87,8 @@ For the current Railway deployment, the live test issue is
 `https://github.com/MAYANK-MAHAUR/Byter/issues/22`. Its permanent run route is
 `https://byter-production-1024.up.railway.app/runs/github-MAYANK-MAHAUR-Byter-22`.
 Before approval, confirm the dashboard says that no branch or pull request has
-been created. The status comment on the issue should contain the same run URL.
+been created. The latest progress comment on the issue should contain the same
+run URL; earlier progress comments remain available as an append-only history.
 
 Use the issue form in `.github/ISSUE_TEMPLATE/bug.yml` for a repeatable test.
 When `REPROSMITH_REQUIRE_TRIGGER_LABEL=true`, only an issue with the configured

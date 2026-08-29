@@ -75,6 +75,21 @@ export class GitHubRestClient {
     });
   }
 
+  async createLabel(owner: string, repo: string, name: string, color: string, description: string): Promise<void> {
+    if (!/^[0-9a-f]{6}$/i.test(color)) {
+      throw new Error("Invalid GitHub label color");
+    }
+
+    await this.request(`${repoBasePath(owner, repo)}/labels`, {
+      method: "POST",
+      body: JSON.stringify({
+        name: expectNonEmpty(name, "label name"),
+        color,
+        description
+      })
+    });
+  }
+
   async createIssueComment(
     owner: string,
     repo: string,

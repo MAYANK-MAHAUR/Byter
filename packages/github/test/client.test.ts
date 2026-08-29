@@ -153,4 +153,23 @@ describe("GitHubRestClient", () => {
     expect(calls[0]?.url).toBe("https://api.github.test/repos/owner/repo/git/refs/heads/reprosmith/fix-17");
     expect(calls[0]?.init.method).toBe("DELETE");
   });
+
+  it("creates a verified label through the repository labels API", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), init: init ?? {} });
+      return new Response("{}", { status: 201, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+    const client = new GitHubRestClient({ token: "token", apiBaseUrl: "https://api.github.test", fetchImpl });
+
+    await client.createLabel("owner", "repo", "reprosmith:verified", "111111", "Issue verified by reproducible evidence");
+
+    expect(calls[0]?.url).toBe("https://api.github.test/repos/owner/repo/labels");
+    expect(calls[0]?.init.method).toBe("POST");
+    expect(JSON.parse(calls[0]?.init.body as string)).toEqual({
+      name: "reprosmith:verified",
+      color: "111111",
+      description: "Issue verified by reproducible evidence"
+    });
+  });
 });

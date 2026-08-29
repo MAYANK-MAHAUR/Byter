@@ -152,7 +152,7 @@ function App() {
         <div className="ribbon-copy"><span className="live-indicator" />{run.sourceLabel}<span className="ribbon-divider" />{run.currentBranch}</div>
         <div className="ribbon-links">
           {run.harness.dashboardUrl ? <a href={run.harness.dashboardUrl}><Link2 size={14} />Permanent run URL</a> : undefined}
-          {run.harness.statusCommentUrl ? <a href={run.harness.statusCommentUrl} target="_blank" rel="noreferrer"><MessageSquareText size={14} />GitHub status</a> : undefined}
+          {run.harness.statusCommentUrl ? <a href={run.harness.statusCommentUrl} target="_blank" rel="noreferrer"><MessageSquareText size={14} />GitHub updates ({run.harness.commentHistory.length})</a> : undefined}
           <strong>{progressLabelFor(currentStatus)}</strong>
         </div>
       </section>
@@ -214,6 +214,7 @@ function HarnessPanel({ harness, run }: { harness: HarnessState; run: DashboardR
         </div>
       </div>
       <AgentRail harness={harness} run={run} />
+      <GitHubActivity harness={harness} />
     </section>
   );
 }
@@ -231,6 +232,17 @@ function AgentRail({ harness, run }: { harness: HarnessState; run: DashboardRun 
     { label: "Fix agent", state: run.candidatePatch ? "complete" : ["fixing", "validating"].includes(run.status) ? "active" : "pending" }
   ];
   return <div className="agent-rail"><div className="rail-label"><WorkflowIcon />Agent activity</div><div className="agent-list">{roles.map((role) => <div className="agent-item" key={role.label}><span className={`agent-mark ${role.state}`} /> <span>{role.label}</span><small>{role.state === "complete" ? "observed" : role.state === "active" ? "working" : role.state === "failed" ? "failed" : "not observed"}</small></div>)}</div></div>;
+}
+
+function GitHubActivity({ harness }: { harness: HarnessState }) {
+  if (harness.commentHistory.length === 0 && !harness.verifiedLabel) return null;
+  const latestComment = harness.commentHistory.at(-1);
+  const labelText = harness.verifiedLabel?.appliedAt
+    ? "reprosmith:verified added"
+    : harness.verifiedLabel?.error
+      ? "verified label failed"
+      : "verification label pending";
+  return <div className="github-activity"><div className="rail-label"><MessageSquareText size={15} />GitHub activity</div><div className="github-activity-details"><strong>{harness.commentHistory.length} progress comment{harness.commentHistory.length === 1 ? "" : "s"}</strong><span>{labelText}</span>{latestComment ? <a href={latestComment.url} target="_blank" rel="noreferrer">Open latest update <ArrowUpRight size={13} /></a> : undefined}</div></div>;
 }
 
 function WorkflowIcon() { return <Layers3 size={15} />; }

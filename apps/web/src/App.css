@@ -263,76 +263,103 @@ h3 { margin-bottom: 0; font-size: 0.96rem; font-weight: 720; line-height: 1.34; 
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
 
-/* Keep the console monochrome so state is carried by labels, borders, and icons. */
-.shell { filter: grayscale(1); }
-body { background: #f2f2f2; }
-a { color: #111111; text-decoration-thickness: 1px; text-underline-offset: 3px; }
-a:visited { color: #111111; }
+/* High-contrast color system: meaning comes from color, labels, and borders together. */
+:root {
+  --ink: #132238;
+  --muted: #526277;
+  --line: #b8c4d3;
+  --paper: #ffffff;
+  --mist: #eef3f8;
+  --blue: #1d5fd1;
+  --mint: #087f68;
+  --amber: #a85b00;
+  --red: #b42318;
+}
+body { background: #eef3f8; }
+a { color: #1554b6; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+a:visited { color: #1554b6; }
 
-.topbar, .run-ribbon, .harness-panel, .view-tabs, .panel { border-color: #111111; }
+.topbar, .run-ribbon, .harness-panel, .view-tabs, .panel { border-color: #7f91a8; }
 .run-ribbon { background: #ffffff; }
-.ribbon-links a { color: #111111; font-weight: 750; }
-.ribbon-links a:hover { color: #ffffff; background: #111111; text-decoration: none; }
+.ribbon-links a { color: #1554b6; font-weight: 750; }
+.ribbon-links a:hover { color: #ffffff; background: #1554b6; text-decoration: none; }
 .ribbon-links a, .ribbon-links strong { padding: 4px 6px; }
 
-.icon-button, .button, .action-button, .view-tabs button { border: 2px solid #111111; }
-.icon-button:hover, .icon-button:focus-visible, .button:hover, .button:focus-visible,
-.action-button:hover, .action-button:focus-visible, .view-tabs button:hover {
-  border-color: #111111;
-  background: #111111;
-  color: #ffffff;
-  filter: none;
+.icon-button, .button, .action-button, .view-tabs button { border-width: 2px; }
+.icon-button:hover, .icon-button:focus-visible { border-color: #1554b6; background: #e8f0ff; color: #1554b6; }
+.button:hover, .button:focus-visible, .action-button:hover, .action-button:focus-visible {
+  border-color: #1554b6;
+  background: #e8f0ff;
+  color: #123d82;
 }
-.action-button:hover small, .action-button:focus-visible small { color: #e5e5e5; }
-.action-button:hover svg, .action-button:focus-visible svg { color: #ffffff !important; }
-.button-primary, .button-success { border-color: #111111; background: #111111; color: #ffffff; }
-.button-primary:hover, .button-success:hover { background: #ffffff; color: #111111; }
-.view-tabs { border: 2px solid #111111; background: #dedede; }
+.action-button:hover small, .action-button:focus-visible small { color: #355b92; }
+.action-button:hover svg, .action-button:focus-visible svg { color: #1554b6 !important; }
+.button-primary { border-color: #1554b6; background: #1554b6; color: #ffffff; }
+.button-primary:hover { background: #0f3e8d; color: #ffffff; }
+.button-success { border-color: #087f68; background: #087f68; color: #ffffff; }
+.button-success:hover { background: #05604f; color: #ffffff; }
+.view-tabs { border: 2px solid #7f91a8; background: #dfe8f2; }
 .view-tabs button { border-color: transparent; }
-.view-tabs button.active { border: 2px solid #111111; background: #ffffff; color: #111111; box-shadow: none; }
-.tab-count { border: 1px solid #111111; border-radius: 0; background: #ffffff; color: #111111; }
+.view-tabs button:hover { color: #123d82; background: #cfe0f7; }
+.view-tabs button.active { border: 2px solid #1554b6; background: #ffffff; color: #123d82; box-shadow: 3px 3px 0 #9db4d2; }
+.tab-count { border: 1px solid #9db0c7; background: #e8f0fb; color: #1554b6; }
 
-.status-pill, .status-success, .status-warning, .status-danger, .status-active {
-  border: 2px solid #111111;
-  background: #ffffff;
-  color: #111111;
-}
-.status-warning { border-style: dashed; }
-.status-danger { border-style: double; }
+.status-success { border-width: 2px; border-color: #5ab89e; background: #e5f6f1; color: #05604f; }
+.status-warning { border-width: 2px; border-color: #e1ae62; background: #fff3df; color: #874600; }
+.status-danger { border-width: 2px; border-color: #e08a81; background: #fff0ee; color: #9b2118; }
+.status-active { border-width: 2px; border-color: #83a9e6; background: #e9f1ff; color: #1554b6; }
 .status-pill svg { fill: currentColor; }
-.live-indicator, .state-dot, .status-dot { background: #111111; box-shadow: 0 0 0 3px #d0d0d0; }
+.live-indicator, .state-dot, .status-dot { background: var(--mint); box-shadow: 0 0 0 3px #c8eee4; }
+.status-dot.status-warning { background: var(--amber); box-shadow: 0 0 0 3px #ffdfaa; }
+.status-dot.status-danger { background: var(--red); box-shadow: 0 0 0 3px #ffd1cc; }
+.status-dot.status-active { background: var(--blue); box-shadow: 0 0 0 3px #cfe0ff; }
 
-.harness-panel { background: #111111; color: #ffffff; box-shadow: 5px 5px 0 #777777; }
-.session-summary, .harness-metric { border-color: #777777; background: #222222; }
-.harness-orbit, .panel-icon, .harness-metric, .session-summary { border-width: 2px; }
-.agent-rail { border-top-color: #777777; }
+.harness-panel { background: #10243d; color: #f7fbff; box-shadow: 5px 5px 0 #94a9c2; }
+.session-summary, .harness-metric { border-color: #3f638b; background: #183453; }
+.harness-orbit { border-color: #5f98cb; color: #90d9c7; }
+.harness-metric > span { color: #8fe0cc; }
+.harness-metric strong, .session-summary h3 { color: #f7fbff; }
+.agent-rail { border-top-color: #3f638b; }
+.agent-mark.complete { background: #73d4b7; }
+.agent-mark.active { background: #76aaf0; box-shadow: 0 0 0 3px rgba(118, 170, 240, 0.22); }
+.agent-mark.failed { background: #f08e86; }
+.github-activity { display: grid; grid-template-columns: 132px 1fr; gap: 16px; align-items: center; margin-top: 16px; padding-top: 14px; border-top: 1px solid #3f638b; }
+.github-activity-details { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; color: #ffffff; font-size: 0.76rem; }
+.github-activity-details strong { font-weight: 760; }
+.github-activity-details span { color: #bad0e7; font-family: var(--mono); font-size: 0.68rem; }
+.github-activity-details a { display: inline-flex; align-items: center; gap: 5px; color: #9ed6ff; font-size: 0.72rem; font-weight: 750; }
+.github-activity-details a:hover { background: #ffffff; color: #1554b6; text-decoration: none; }
 
-.finding-callout, .preapproval-state, .security-banner, .empty-state, .evidence-note {
-  border: 2px solid #111111;
-  background: #f1f1f1;
-  color: #111111;
-}
-.preapproval-state, .security-banner.blocked, .evidence-note { border-style: dashed; }
-.finding-callout p, .preapproval-state span, .security-banner span { color: #444444; }
-.approval-state, .file-list li, .trace-details span, .proof-block, .trace-row, .security-finding {
-  border-color: #999999;
-}
-.file-list li, .trace-details span { background: #f7f7f7; color: #222222; }
-.trace-row { border-width: 1px 1px 1px 4px; border-left-color: #111111; background: #ffffff; }
-.trace-mcp, .trace-sandbox, .trace-subagent, .trace-github { border-left-color: #111111; }
-.trace-icon { border: 1px solid #999999; background: #eeeeee; color: #111111; }
-.trace-output { border-top-color: #999999; }
-.trace-output summary { border: 1px solid #111111; padding: 7px 8px; color: #111111; text-decoration: underline; text-underline-offset: 3px; }
-.trace-output summary:hover { background: #111111; color: #ffffff; text-decoration: none; }
-.trace-output code, .trace-output pre, .patch-body { background: #111111; color: #ffffff; }
-.trace-output pre.stderr { color: #ffffff; }
-.proof-point { border-bottom-color: #c0c0c0; }
-.proof-point > span { border: 1px solid #999999; background: #eeeeee; color: #111111; }
-.preapproval-state svg, .finding-callout svg, .security-banner svg, .approval-meta svg, .patch-meta svg, .file-list svg { color: #111111; }
-.security-finding code, .severity { color: #111111; }
+.finding-callout, .security-banner { border-width: 2px; }
+.finding-callout { border-color: #65bda8; background: #e8f7f3; color: #05604f; }
+.finding-callout p, .preapproval-state span, .security-banner span { color: #496175; }
+.preapproval-state, .evidence-note { border: 2px dashed #d79a43; background: #fff8eb; color: #874600; }
+.security-banner.blocked { border: 2px dashed #d98278; background: #fff2f0; color: #9b2118; }
+.empty-state { border: 2px solid #b8c4d3; background: #f8fbfe; color: #526277; }
+.approval-state, .file-list li, .trace-details span, .proof-block, .trace-row, .security-finding { border-color: #b8c4d3; }
+.file-list li, .trace-details span { background: #f3f7fb; color: #243a56; }
+.trace-row { border-width: 1px 1px 1px 4px; border-left-color: #7892b1; background: #ffffff; }
+.trace-mcp { border-left-color: #4a86db; }
+.trace-sandbox { border-left-color: #168b75; }
+.trace-subagent { border-left-color: #8a6bc5; }
+.trace-github { border-left-color: #c47819; }
+.trace-icon { border: 1px solid #b8c4d3; background: #edf3fa; color: #355d8c; }
+.trace-mcp .trace-icon { color: #1d5fd1; background: #e9f1ff; }
+.trace-sandbox .trace-icon { color: #087f68; background: #e5f6f1; }
+.trace-github .trace-icon { color: #a85b00; background: #fff3df; }
+.trace-output { border-top-color: #d3dce7; }
+.trace-output summary { border: 1px solid #7f91a8; padding: 7px 8px; color: #1554b6; text-decoration: underline; text-underline-offset: 3px; }
+.trace-output summary:hover { background: #e8f0ff; color: #123d82; text-decoration: none; }
+.trace-output code, .trace-output pre, .patch-body { background: #10243d; color: #e6f1ff; }
+.trace-output pre.stderr { color: #ffb7ad; }
+.proof-point { border-bottom-color: #d5dee8; }
+.proof-point > span { border: 1px solid #9db0c7; background: #edf3fa; color: #087f68; }
+.preapproval-state svg, .finding-callout svg, .security-banner svg, .approval-meta svg, .patch-meta svg, .file-list svg { color: #1554b6; }
+.security-finding { border-color: #df9890; background: #fff8f7; }
+.security-finding code, .severity { color: #9b2118; }
 
 summary { cursor: pointer; }
 button:focus-visible, a:focus-visible, summary:focus-visible {
-  outline: 3px solid #111111;
+  outline: 3px solid #1554b6;
   outline-offset: 3px;
 }

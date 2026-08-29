@@ -32,7 +32,7 @@ deterministic fixture mode:
 - patch validator with protected reproducer files, symlink defense, and regression checks
 - React dashboard with an always-visible TrueForge harness panel, readable trace tabs, reproduction proof, candidate patch, security review, and approval controls
 - production Node server for dashboard/API serving, receipt persistence, and Railway health checks
-- one GitHub status comment per live run, updated in place with a permanent `/runs/:runId` dashboard URL
+- append-only GitHub progress comments per live run with a permanent `/runs/:runId` dashboard URL
 - local end-to-end demo runner
 - GitHub Actions CI running the full workspace verification
 
@@ -70,7 +70,7 @@ approval checkpoint, run record, and dashboard.
 GitHub issue
     |
     v
-ReproSmith server -- signed intake + security scan -- GitHub status comment
+ReproSmith server -- signed intake + security scan -- GitHub progress comments
     |
     v
 TrueForge session / turn -- AgentRouter model
@@ -94,7 +94,7 @@ Open the Vite URL printed by the command, usually http://127.0.0.1:5173.
 
 The dashboard is a console for the same proof path: TrueForge session identity,
 agent activity, MCP calls, Daytona commands, timeline, reproduction evidence,
-candidate patch, security findings, GitHub status comment, and approval state.
+candidate patch, security findings, GitHub progress comments, verified label, and approval state.
 It runs in live mode by default, so it reads persisted webhook runs and sends
 approval actions to the ReproSmith server. A URL such as
 `/runs/github-MAYANK-MAHAUR-Byter-22` reconnects to that specific persisted run.
@@ -135,9 +135,10 @@ Key variables:
 - REPROSMITH_API_TARGET for the local Vite proxy
 - VITE_REPROSMITH_API_URL and VITE_REPROSMITH_DATA_MODE for the web console
 - APPROVAL_TOKEN, MCP_AUTH_TOKEN, MCP_PUBLIC_URL
-- `APP_BASE_URL` for permanent GitHub status-comment links
+- `APP_BASE_URL` for permanent GitHub progress-comment links
 - `REPROSMITH_REQUIRE_TRIGGER_LABEL` and `REPROSMITH_TRIGGER_LABEL` for explicit issue triggering
 - `GITHUB_TOKEN` for the authenticated remote MCP transport
+- GitHub access requires `Issues: Read and write` for progress comments and the `reprosmith:verified` label; `Contents` and `Pull requests` write access is only used after maintainer approval for a draft PR
 - `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY`, and `GITHUB_INSTALLATION_ID` are reserved for GitHub App token exchange
 - `DATA_DIR` for server-side JSONL receipt/run persistence
 
@@ -159,7 +160,7 @@ packages/repro-engine Reproduction, fingerprinting, minimization, patch proof
 
 ## Safety Model
 
-ReproSmith treats issue text as untrusted input. The scanner blocks credential exfiltration and destructive shell requests, records prompt-injection attempts, and the runtime instructions require a human approval checkpoint before GitHub mutations. Patch validation copies work into a temporary workspace and rejects changes to protected reproducer files. Harness output is bounded and redacted before persistence. Status comments are operational run receipts; branches, commits, labels, and pull requests remain approval-gated.
+ReproSmith treats issue text as untrusted input. The scanner blocks credential exfiltration and destructive shell requests, records prompt-injection attempts, and the runtime instructions require a human approval checkpoint before GitHub mutations. Patch validation copies work into a temporary workspace and rejects changes to protected reproducer files. Harness output is bounded and redacted before persistence. Progress comments are operational run receipts; the verified label is added only after complete proof, while branches, commits, and pull requests remain approval-gated.
 
 ## Live Evidence
 

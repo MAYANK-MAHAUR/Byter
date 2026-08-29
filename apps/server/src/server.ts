@@ -23,6 +23,7 @@ import { runDemo, type DemoRunSummary } from "@reprosmith/demo-runner";
 import { GitHubRestClient, parseIssueWebhook, verifyGitHubWebhook } from "@reprosmith/github";
 
 type ApprovalActionId = "approve-pr" | "request-diff" | "reject-run";
+type GitHubCommentKind = "started" | "completed" | "failed" | "approval";
 const maxRequestBodyBytes = 64 * 1024;
 const maxLatestRunReadBytes = 256 * 1024;
 const maxResultTextBytes = 256 * 1024;
@@ -115,6 +116,8 @@ interface PersistedWebhookRunRecord {
   issueBody: string;
   dashboardUrl?: string;
   githubStatusComment?: { id?: number; url: string };
+  githubComments?: Array<{ id?: number; url: string; kind: GitHubCommentKind; createdAt: string }>;
+  verifiedLabel?: { name: "reprosmith:verified"; appliedAt?: string; error?: string };
   run: ReturnType<typeof createRun>;
   scan: ReturnType<typeof scanIssueText>;
   trueForge: {
@@ -153,25 +156,12 @@ export function createReproSmithServer(options: ReproSmithServerOptions = {}): S
       }
 
       if (url.pathname === "/api/runs/latest") {
-        await handleLatestRun(
-          request,
-          response,
-          dataDir ? resolve(dataDir) : undefined,
-          trueForgeRuntime,
-          githubClient
-        );
+        await handleLatestRun(request, response, dataDir ? resolve(dataDir) : undefined, trueForgeRuntime);
         return;
       }
 
       if (url.pathname.startsWith("/api/runs/") && url.pathname !== "/api/runs/latest") {
-        await handleRun(
-          request,
-          response,
-          dataDir ? resolve(dataDir) : undefined,
-          decodeRunId(url.pathname),
-          trueForgeRuntime,
-          githubClient
-        );
+        await handleRun(request, response, dataDir ? resolve(dataDir) : undefined, decodeRunId(url.pathname), trueForgeRuntime);
         return;
       }
 
@@ -266,12 +256,17 @@ async function handleGitHubWebhook(
   } catch {
     throw new HttpError(400, "Malformed GitHub issues webhook payload");
   }
-  if (!["opened", "edited", "reopened"].includes(webhook.action)) {
+  if (!["opened", "edited", "reopened", "labeled"].includes(webhook.action)) {
     sendJson(response, 202, { ignored: true, reason: `Unsupported issue action: ${webhook.action}` });
     return;
   }
 
-  if (requiresExplicitTrigger() && !hasExplicitTrigger(webhook)) {
+  const explicitTrigger = hasExplicitTrigger(webhook);
+  if (
+    (webhook.action === "labeled" && !hasTriggerLabel(webhook)) ||
+    ((webhook.action === "edited" || webhook.action === "reopened") && !explicitTrigger) ||
+    (requiresExplicitTrigger() && !explicitTrigger)
+  ) {
     sendJson(response, 202, {
       ignored: true,
       reason: `Issue does not have the ${triggerLabel()} label or an explicit trigger marker`
@@ -281,7 +276,11 @@ async function handleGitHubWebhook(
 
   const issueText = [webhook.issue.title, webhook.issue.body ?? ""].join("\n");
   const scan = scanIssueText(issueText);
-  let run = createRun(`github-${webhook.repository.owner.login}-${webhook.repository.name}-${webhook.issue.number}`, {
+  const runId = `github-${webhook.repository.owner.login}-${webhook.repository.name}-${webhook.issue.number}-${createHash("sha256")
+    .update(deliveryId)
+    .digest("hex")
+    .slice(0, 12)}`;
+  let run = createRun(runId, {
     owner: webhook.repository.owner.login,
     repo: webhook.repository.name,
     issueNumber: webhook.issue.number,
@@ -305,13 +304,13 @@ async function handleGitHubWebhook(
     baseBranch: webhook.repository.default_branch,
     issueTitle: webhook.issue.title,
     issueBody: webhook.issue.body ?? "",
-    dashboardUrl: dashboardUrlFor(request, run.id),
+    dashboardUrl: dashboardUrlFor(run.id),
     run,
     scan,
     trueForge: orchestration.trueForge
   };
   await mkdir(dataDir, { recursive: true });
-  const commentRecord = await syncGitHubStatusComment(record, githubClient);
+  const commentRecord = await appendGitHubComment(record, githubClient, "started");
   await appendFile(join(dataDir, "webhook-runs.jsonl"), `${JSON.stringify(commentRecord)}\n`, "utf8");
   if (orchestration.trueForge.status === "started" && trueForgeRuntime?.subscribeToTurn) {
     void monitorTrueForgeTurn(dataDir, commentRecord, trueForgeRuntime, githubClient);
@@ -324,8 +323,7 @@ async function handleLatestRun(
   request: IncomingMessage,
   response: ServerResponse,
   dataDir: string | undefined,
-  trueForgeRuntime: ReproSmithSessionStarter | undefined,
-  githubClient: GitHubRestClientLike | undefined
+  trueForgeRuntime: ReproSmithSessionStarter | undefined
 ): Promise<void> {
   if (request.method !== "GET") {
     sendJson(response, 405, { error: "Method not allowed" });
@@ -344,8 +342,7 @@ async function handleLatestRun(
   }
 
   const refreshed = await refreshLegacyHarnessTrace(dataDir, latest, trueForgeRuntime);
-  const commented = await createMissingGitHubStatusComment(dataDir, refreshed, githubClient, request);
-  sendJson(response, 200, hydratePersistedPullRequest(commented));
+  sendJson(response, 200, hydratePersistedPullRequest(ensureDashboardUrl(refreshed)));
 }
 
 async function handleRun(
@@ -353,8 +350,7 @@ async function handleRun(
   response: ServerResponse,
   dataDir: string | undefined,
   runId: string,
-  trueForgeRuntime: ReproSmithSessionStarter | undefined,
-  githubClient: GitHubRestClientLike | undefined
+  trueForgeRuntime: ReproSmithSessionStarter | undefined
 ): Promise<void> {
   if (request.method !== "GET") {
     sendJson(response, 405, { error: "Method not allowed" });
@@ -368,32 +364,17 @@ async function handleRun(
   }
 
   const refreshed = await refreshLegacyHarnessTrace(dataDir, record, trueForgeRuntime);
-  sendJson(response, 200, hydratePersistedPullRequest(await createMissingGitHubStatusComment(dataDir, refreshed, githubClient, request)));
+  sendJson(response, 200, hydratePersistedPullRequest(ensureDashboardUrl(refreshed)));
 }
 
-async function createMissingGitHubStatusComment(
-  dataDir: string | undefined,
-  value: unknown,
-  githubClient: GitHubRestClientLike | undefined,
-  request: IncomingMessage
-): Promise<unknown> {
-  if (!dataDir || !githubClient || !isRecord(value) || !isRecord(value.run) || !isRecord(value.trueForge)) {
+function ensureDashboardUrl(value: unknown): unknown {
+  if (!isRecord(value) || !isRecord(value.run) || typeof value.run.id !== "string") {
     return value;
   }
-
-  const record = value as unknown as PersistedWebhookRunRecord;
-  if (record.githubStatusComment && record.dashboardUrl) {
-    return record;
+  if (typeof value.dashboardUrl === "string" && value.dashboardUrl.length > 0) {
+    return value;
   }
-
-  const withDashboard = record.dashboardUrl
-    ? record
-    : { ...record, dashboardUrl: dashboardUrlFor(request, record.run.id) };
-  const commented = await syncGitHubStatusComment(withDashboard, githubClient);
-  if (commented.githubStatusComment) {
-    await appendUpdatedLiveRecord(dataDir, commented);
-  }
-  return commented;
+  return { ...value, dashboardUrl: dashboardUrlFor(value.run.id) };
 }
 
 function decodeRunId(pathname: string): string {
@@ -426,7 +407,7 @@ async function refreshLegacyHarnessTrace(
 
   try {
     const events = hasRichTrace ? [] : await trueForgeRuntime.listSessionEvents(session);
-    const projected = hasRichTrace ? [] : events.flatMap((event) => projectTrueForgeEvent(event));
+    const projected = hasRichTrace ? [] : events.flatMap((event, index) => projectTrueForgeEvent(event, index));
     if (!hasRichTrace && projected.length === 0 && !needsMetadata) return value;
     const updated = {
       ...value,
@@ -641,7 +622,7 @@ async function handleApproval(
     }
     const receipt = buildApprovalReceipt(runId, actionId, patchHash, resultStatusFor(actionId), messageFor(actionId));
     await appendApprovalReceipt(dataDir, receipt);
-    const updatedRecord = await syncGitHubStatusComment({
+    const updatedRecord = await appendGitHubComment({
       ...liveRecord,
       run,
       trueForge: {
@@ -657,7 +638,7 @@ async function handleApproval(
           artifact: actionId === "reject-run" ? "run stopped" : "write held"
         }])
       }
-    }, githubClient);
+    }, githubClient, "approval");
     await appendUpdatedLiveRecord(dataDir, updatedRecord);
     sendJson(response, 200, receipt);
     return;
@@ -748,7 +729,7 @@ async function handleApproval(
       }
     }
   };
-  const commentedRecord = await syncGitHubStatusComment(updatedRecord, githubClient);
+  const commentedRecord = await appendGitHubComment(updatedRecord, githubClient, "approval");
   await appendUpdatedLiveRecord(dataDir, commentedRecord);
   const receipt = buildApprovalReceipt(
     runId,
@@ -808,75 +789,151 @@ async function appendUpdatedLiveRecord(dataDir: string, record: PersistedWebhook
   await appendFile(join(dataDir, "webhook-runs.jsonl"), `${JSON.stringify(record)}\n`, "utf8");
 }
 
-async function syncGitHubStatusComment(
+async function applyVerifiedLabel(
   record: PersistedWebhookRunRecord,
   githubClient: GitHubRestClientLike | undefined
+): Promise<PersistedWebhookRunRecord> {
+  if (!githubClient || record.verifiedLabel || !hasGenuineProof(record.trueForge.result)) {
+    return record;
+  }
+
+  try {
+    const owner = record.run.issue.owner;
+    const repo = record.run.issue.repo;
+    const issueNumber = record.run.issue.issueNumber;
+    try {
+      await githubClient.addLabels(owner, repo, issueNumber, ["reprosmith:verified"]);
+    } catch (error) {
+      if (!githubClient.createLabel) throw error;
+      await githubClient.createLabel(owner, repo, "reprosmith:verified", "111111", "Issue verified by reproducible evidence");
+      await githubClient.addLabels(owner, repo, issueNumber, ["reprosmith:verified"]);
+    }
+    return {
+      ...record,
+      verifiedLabel: { name: "reprosmith:verified", appliedAt: new Date().toISOString() }
+    };
+  } catch {
+    return {
+      ...record,
+      verifiedLabel: { name: "reprosmith:verified", error: "GitHub did not accept the verified label request" }
+    };
+  }
+}
+
+function hasGenuineProof(result: LiveProofResult | undefined): boolean {
+  const proof = result?.proof;
+  return Boolean(
+    (result?.status === "verified" || result?.status === "patch-ready") &&
+      proof?.before &&
+      proof.after &&
+      proof.regressions &&
+      proof.attempts
+  );
+}
+
+async function appendGitHubComment(
+  record: PersistedWebhookRunRecord,
+  githubClient: GitHubRestClientLike | undefined,
+  kind: GitHubCommentKind
 ): Promise<PersistedWebhookRunRecord> {
   if (!githubClient) {
     return record;
   }
 
-  const body = buildGitHubStatusComment(record);
+  const body = buildGitHubStatusComment(record, kind);
   try {
-    if (record.githubStatusComment?.id && githubClient.updateIssueComment) {
-      const updated = await githubClient.updateIssueComment(
-        record.run.issue.owner,
-        record.run.issue.repo,
-        record.githubStatusComment.id,
-        body
-      );
-      return {
-        ...record,
-        githubStatusComment: {
-          id: updated.id ?? record.githubStatusComment.id,
-          url: updated.html_url || record.githubStatusComment.url
-        }
-      };
-    }
-
     const created = await githubClient.createIssueComment(
       record.run.issue.owner,
       record.run.issue.repo,
       record.run.issue.issueNumber,
       body
     );
+    const comment = {
+      ...(created.id !== undefined ? { id: created.id } : {}),
+      url: created.html_url,
+      kind,
+      createdAt: new Date().toISOString()
+    };
     return {
       ...record,
+      githubComments: [...(record.githubComments ?? []), comment],
       githubStatusComment: {
         ...(created.id !== undefined ? { id: created.id } : {}),
         url: created.html_url
       }
     };
   } catch (error) {
-    console.error("GitHub status comment sync failed", error);
+    console.error("GitHub progress comment creation failed", error);
     return record;
   }
 }
 
-function buildGitHubStatusComment(record: PersistedWebhookRunRecord): string {
+function buildGitHubStatusComment(record: PersistedWebhookRunRecord, kind: GitHubCommentKind): string {
   const status = githubCommentStatus(record);
-  const proof = record.trueForge.result?.summary;
-  const pullRequest = record.trueForge.result?.pullRequest;
+  const result = record.trueForge.result;
+  const proof = result?.summary ? safeCommentText(result.summary, 1_000) : undefined;
+  const pullRequest = result?.pullRequest;
+  const comments = record.githubComments ?? [];
   const lines = [
     `<!-- reprosmith-run:${record.run.id} -->`,
     `## ReproSmith: ${status.label}`,
     "",
-    `**Issue:** #${record.run.issue.issueNumber} ${record.issueTitle}`,
+    `**Issue:** #${record.run.issue.issueNumber} ${safeCommentText(record.issueTitle, 300)}`,
     `**Run:** \`${record.run.id}\``,
     `**Dashboard:** [Open the permanent run dashboard](${record.dashboardUrl ?? "#"})`,
     `**TrueForge:** ${record.trueForge.session?.id ? `session \`${record.trueForge.session.id}\`` : "session pending"}${record.trueForge.turn?.id ? `, turn \`${record.trueForge.turn.id}\`` : ""}`,
+    `**Update:** ${commentUpdateLabel(kind)}${comments.length > 0 ? ` (update ${comments.length + 1})` : ""}`,
     "",
-    status.detail
+    safeCommentText(status.detail, 1_000)
   ];
 
   if (proof) {
-    lines.push("", `**Agent summary:** ${clampText(proof, 1_000)}`);
+    lines.push("", `**Agent summary:** ${proof}`);
+  }
+  if (result?.proof) {
+    lines.push(
+      "",
+      "### Evidence",
+      ...[
+        result.proof.attempts ? `- Attempts: ${safeCommentText(result.proof.attempts, 200)}` : undefined,
+        result.proof.before ? `- Before: ${safeCommentText(result.proof.before, 900)}` : undefined,
+        result.proof.after ? `- After: ${safeCommentText(result.proof.after, 900)}` : undefined,
+        result.proof.regressions ? `- Regression: ${safeCommentText(result.proof.regressions, 900)}` : undefined
+      ].filter((line): line is string => line !== undefined)
+    );
+  }
+  if (result?.candidatePatch) {
+    lines.push(
+      "",
+      "### Remedy",
+      safeCommentText(result.candidatePatch.body, 2_500),
+      "",
+      `Files: ${result.candidatePatch.files.map((file) => `\`${safeCommentText(file.path, 240)}\``).join(", ")}`,
+      `Verified label: ${record.verifiedLabel?.appliedAt ? "`reprosmith:verified` added" : record.verifiedLabel?.error ? "could not be added" : "pending"}`
+    );
+  } else if (record.run.status === "failed") {
+    lines.push(
+      "",
+      "### Next step",
+      "No genuine proof contract was returned. No verified label or repository mutation was made."
+    );
   }
   if (pullRequest) {
     lines.push("", `**Draft PR:** [#${pullRequest.number}](${pullRequest.url})`);
   }
 
   return lines.join("\n");
+}
+
+function safeCommentText(value: string, maxBytes: number): string {
+  return clampText(redactHarnessText(value), maxBytes);
+}
+
+function commentUpdateLabel(kind: GitHubCommentKind): string {
+  if (kind === "started") return "TrueForge handoff started";
+  if (kind === "completed") return "Proof processing completed";
+  if (kind === "failed") return "Run stopped";
+  return "Maintainer decision recorded";
 }
 
 function githubCommentStatus(record: PersistedWebhookRunRecord): { label: string; detail: string } {
@@ -1137,14 +1194,19 @@ async function monitorTrueForgeTurn(
   try {
     let events: TrueForgeRuntimeEvent[];
     let liveRecord = record;
+    let liveEventIndex = 0;
     const persistTraceEvent: TrueForgeRuntimeEventListener = async (event) => {
-      const projected = projectTrueForgeEvent(event);
+      const projected = projectTrueForgeEvent(event, liveEventIndex);
+      liveEventIndex += 1;
       if (projected.length === 0) return;
+      const previousEvents = liveRecord.trueForge.events ?? [];
+      const nextEvents = mergeHarnessEvents(previousEvents, projected);
+      if (JSON.stringify(previousEvents) === JSON.stringify(nextEvents)) return;
       liveRecord = {
         ...liveRecord,
         trueForge: {
           ...liveRecord.trueForge,
-          events: mergeHarnessEvents(liveRecord.trueForge.events ?? [], projected)
+          events: nextEvents
         }
       };
       await appendUpdatedLiveRecord(dataDir, liveRecord);
@@ -1179,7 +1241,7 @@ async function monitorTrueForgeTurn(
 
     const eventMetadata = mergeHarnessEvents(
       liveRecord.trueForge.events ?? [],
-      events.flatMap((event) => projectTrueForgeEvent(event))
+      events.flatMap((event, index) => projectTrueForgeEvent(event, index))
     );
     const completed = events.some((event) => event.type === "turn.done");
     const result = completed ? extractLiveProofResult(events, record) : undefined;
@@ -1195,12 +1257,17 @@ async function monitorTrueForgeTurn(
       trueForge: {
         ...liveRecord.trueForge,
         status: completed ? "completed" : "started",
-        ...(completed ? {} : { error: "TrueForge turn is still running; completion has not been observed" }),
+        ...(completed
+          ? result
+            ? {}
+            : { error: "TrueForge completed without a valid reprosmith.result contract" }
+          : { error: "TrueForge turn is still running; completion has not been observed" }),
         events: eventMetadata,
         ...(result ? { result } : {})
       }
     };
-    const commentedRecord = await syncGitHubStatusComment(completedRecord, githubClient);
+    const labeledRecord = result ? await applyVerifiedLabel(completedRecord, githubClient) : completedRecord;
+    const commentedRecord = await appendGitHubComment(labeledRecord, githubClient, result ? "completed" : "failed");
     await appendUpdatedLiveRecord(dataDir, commentedRecord);
   } catch (error) {
     console.error("TrueForge turn subscription failed", error);
@@ -1208,29 +1275,27 @@ async function monitorTrueForgeTurn(
     if (failedRun.status === "environment-building") {
       failedRun = transitionRun(failedRun, "failed", "TrueForge turn monitoring failed");
     }
-    await appendFile(
-      join(dataDir, "webhook-runs.jsonl"),
-      `${JSON.stringify({
-        ...record,
-        run: failedRun,
-        trueForge: {
-          ...record.trueForge,
-          status: "failed",
-          error: "TrueForge turn monitoring failed"
-        }
-      })}\n`,
-      "utf8"
-    );
+    const failedRecord = {
+      ...record,
+      run: failedRun,
+      trueForge: {
+        ...record.trueForge,
+        status: "failed",
+        error: "TrueForge turn monitoring failed"
+      }
+    } satisfies PersistedWebhookRunRecord;
+    const commentedRecord = await appendGitHubComment(failedRecord, githubClient, "failed");
+    await appendUpdatedLiveRecord(dataDir, commentedRecord);
   }
 }
 
-function projectTrueForgeEvent(event: TrueForgeRuntimeEvent): HarnessTraceEvent[] {
+function projectTrueForgeEvent(event: TrueForgeRuntimeEvent, fallbackIndex = 0): HarnessTraceEvent[] {
   const raw = unwrapRuntimeEvent(event.raw);
   if (!isRecord(raw)) return [];
 
   const type = typeof raw.type === "string" ? raw.type : event.type;
   const at = typeof raw.created_at === "string" ? raw.created_at : new Date().toISOString();
-  const eventId = typeof raw.id === "string" ? raw.id : `${event.sequenceNumber ?? "event"}-${type}`;
+  const eventId = typeof raw.id === "string" ? raw.id : `${event.sequenceNumber ?? "event"}-${type}-${fallbackIndex}`;
   const toolCalls = Array.isArray(raw.tool_calls) ? raw.tool_calls : [];
   const base = {
     sequenceNumber: event.sequenceNumber,
@@ -1252,7 +1317,7 @@ function projectTrueForgeEvent(event: TrueForgeRuntimeEvent): HarnessTraceEvent[
         status: category === "sandbox" ? "running" as const : "info" as const,
         summary: summaryForTool(name, args),
         toolName: name,
-        ...(typeof args.path === "string" ? { target: args.path } : {}),
+        ...(typeof args.path === "string" ? { target: redactHarnessText(args.path) } : {}),
         ...(typeof args.issueNumber === "number" ? { target: `issue #${args.issueNumber}` } : {}),
         ...(typeof args.command === "string" ? { command: redactHarnessText(args.command) } : {}),
         ...(typeof args.sandboxId === "string" ? { sandboxId: args.sandboxId } : {}),
@@ -1341,7 +1406,7 @@ function categoryForTool(name: string): HarnessEventCategory {
 
 function summaryForTool(name: string, args: Record<string, unknown>): string {
   if (name === "exec" || name === "shell" || name === "run_command") return "Running a command in the Daytona sandbox";
-  if (name === "read_file") return `Reading ${typeof args.path === "string" ? args.path : "a repository file"} through GitHub MCP`;
+  if (name === "read_file") return `Reading ${typeof args.path === "string" ? redactHarnessText(args.path) : "a repository file"} through GitHub MCP`;
   if (name === "read_issue") return `Reading ${typeof args.issueNumber === "number" ? `issue #${args.issueNumber}` : "the GitHub issue"} through GitHub MCP`;
   if (name === "create_fix_pull_request") return "Preparing the approved GitHub pull request write";
   if (categoryForTool(name) === "subagent") return `Delegating ${typeof args.name === "string" ? args.name : "a focused task"}`;
@@ -1404,6 +1469,7 @@ function redactHarnessText(value: string): string {
   return clampText(
     value
       .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer [REDACTED]")
+      .replace(/["']?(?:api[_-]?key|token|secret|password)["']?\s*[:=]\s*["']?[^"',\s}]+["']?/gi, "[REDACTED]")
       .replace(/(api[_-]?key|token|secret|password)\s*[:=]\s*[^\s,;]+/gi, "$1=[REDACTED]")
       .replace(/\bsk-[A-Za-z0-9_-]+\b/g, "[REDACTED]")
       .replace(/\bgh[pousr]_[A-Za-z0-9_]+\b/g, "[REDACTED]")
@@ -1419,11 +1485,16 @@ function extractLiveProofResult(events: TrueForgeRuntimeEvent[], record: Persist
     return undefined;
   }
 
-  const event = unwrapRuntimeEvent(done.raw);
-  const state = isRecord(event) && isRecord(event.state) ? event.state : undefined;
-  const output = state && isRecord(state.output) ? state.output : undefined;
-  const outputText = clampText(output ? contentText(output.content) : "", maxResultTextBytes);
-  const parsed = parseResultJson(outputText);
+  const outputTexts = [
+    ...resultOutputTexts(done.raw),
+    ...events
+      .filter((event) => event.type === "model.message")
+      .reverse()
+      .flatMap((event) => resultOutputTexts(event.raw))
+  ];
+  const parsed = outputTexts
+    .map((outputText) => parseResultJson(clampText(outputText, maxResultTextBytes)))
+    .find((candidate): candidate is Record<string, unknown> => candidate !== undefined);
   if (!parsed) {
     return undefined;
   }
@@ -1457,6 +1528,23 @@ function extractLiveProofResult(events: TrueForgeRuntimeEvent[], record: Persist
     ...(proof && Object.keys(proof).length > 0 ? { proof } : {}),
     ...(candidatePatch ? { candidatePatch } : {})
   };
+}
+
+function resultOutputTexts(value: unknown): string[] {
+  const event = unwrapRuntimeEvent(value);
+  if (!isRecord(event)) return [];
+
+  const state = isRecord(event.state) ? event.state : undefined;
+  const candidates = [
+    state?.output,
+    state?.result,
+    event.output,
+    event.result,
+    event.content,
+    event.message
+  ];
+
+  return candidates.map(contentText).filter((text) => text.length > 0);
 }
 
 function normalizeCandidatePatch(value: unknown, record: PersistedWebhookRunRecord, summary: string): LiveCandidatePatch | undefined {
@@ -1559,6 +1647,12 @@ function contentText(value: unknown): string {
   if (typeof value === "string") {
     return value;
   }
+  if (isRecord(value)) {
+    if (typeof value.text === "string") return value.text;
+    if ("content" in value) return contentText(value.content);
+    if ("output" in value) return contentText(value.output);
+    return "";
+  }
   if (!Array.isArray(value)) {
     return "";
   }
@@ -1645,16 +1739,13 @@ function headerValue(request: IncomingMessage, name: string): string | undefined
   return value;
 }
 
-function dashboardUrlFor(request: IncomingMessage, runId: string): string {
-  const configuredBase = process.env.APP_BASE_URL?.trim().replace(/\/+$/, "");
+function dashboardUrlFor(runId: string): string {
+  const configuredBase = (process.env.APP_BASE_URL ?? process.env.PUBLIC_BASE_URL)?.trim().replace(/\/+$/, "");
   if (configuredBase) {
     return `${configuredBase}/runs/${encodeURIComponent(runId)}`;
   }
 
-  const host = headerValue(request, "x-forwarded-host") ?? headerValue(request, "host") ?? "localhost";
-  const forwardedProto = headerValue(request, "x-forwarded-proto")?.split(",")[0]?.trim();
-  const protocol = forwardedProto === "https" ? "https" : "http";
-  return `${protocol}://${host}/runs/${encodeURIComponent(runId)}`;
+  return `http://localhost/runs/${encodeURIComponent(runId)}`;
 }
 
 function requiresExplicitTrigger(): boolean {
@@ -1665,13 +1756,15 @@ function triggerLabel(): string {
   return process.env.REPROSMITH_TRIGGER_LABEL?.trim() || "reprosmith:run";
 }
 
+function hasTriggerLabel(webhook: ReturnType<typeof parseIssueWebhook>): boolean {
+  return (webhook.issue.labels ?? []).some((label) => (typeof label === "string" ? label : label.name) === triggerLabel());
+}
+
 function hasExplicitTrigger(webhook: ReturnType<typeof parseIssueWebhook>): boolean {
-  const labels = webhook.issue.labels ?? [];
-  if (labels.some((label) => (typeof label === "string" ? label : label.name) === triggerLabel())) {
+  if (/(^|\n)\/reprosmith\s+run(?:\s|$)/i.test(webhook.issue.body ?? "")) {
     return true;
   }
-
-  return /(^|\n)\/reprosmith\s+run(?:\s|$)/i.test(webhook.issue.body ?? "");
+  return (webhook.action === "opened" || webhook.action === "labeled") && hasTriggerLabel(webhook);
 }
 
 function resultStatusFor(actionId: ApprovalActionId) {
