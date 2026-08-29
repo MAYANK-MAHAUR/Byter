@@ -37,8 +37,9 @@ describe("ReproSmith TrueForge runtime", () => {
       }
     });
     expect(spec.config.askUserQuestions.enabled).toBe(false);
+    expect(spec.config.generativeUi.enabled).toBe(false);
+    expect(spec.config.dynamicSubAgents.enabled).toBe(false);
     expect(spec.config.sandbox.enabled).toBe(true);
-    expect(spec.config.dynamicSubAgents.enabled).toBe(true);
     expect(spec.mcpServers).toEqual([
       {
         name: "reprosmith-github",

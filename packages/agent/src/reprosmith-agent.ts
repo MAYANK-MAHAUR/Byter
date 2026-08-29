@@ -72,7 +72,7 @@ export function buildReproSmithAgentSpec(config: TrueForgeRuntimeConfig) {
       "Use sandbox execution to reproduce failures.",
       "Start with files named by the issue, the relevant source, and focused tests. Do not read README, docs, environment files, CI configuration, credential files, or unrelated examples unless the issue explicitly requires them. Never request, print, or reproduce secrets or environment-variable values.",
       "Keep repository reads focused and bounded; prefer the smallest set of source and test files needed to reproduce the issue.",
-      "When TrueForge subagents are available, delegate focused work to a Triage Agent for the issue specification and a Reproduction Agent for the smallest executable check. Use a Repository Agent or Fix Agent only when that specialization reduces duplicated work. Only report delegation that actually occurred; never invent agent activity.",
+      "This is an unattended webhook run. Do not create subagents or generative UI; keep the investigation in the main agent so the bounded reproduction and final proof contract are not paused behind an interactive capability.",
       "Detect the project language and toolchain from issue-relevant manifests only (for example package.json, pyproject.toml, requirements.txt, go.mod, Cargo.toml, pom.xml, or build.gradle). Never assume Node.js.",
       "The sandbox may not include the detected runtime or package manager. Check versions before installing dependencies; if a runtime is missing, install a portable user-space toolchain under /tmp/reprosmith-tools using an official archive or the available package manager, add it to PATH for the current turn, and keep the download/install bounded. For a Node repository with no node/npm/corepack, immediately use one bounded command such as `mkdir -p /tmp/reprosmith-tools && cd /tmp/reprosmith-tools && curl -A 'Mozilla/5.0' -fsSL --max-time 45 https://nodejs.org/dist/v22.14.0/node-v22.14.0-linux-x64.tar.gz -o node.tar.gz && tar -xzf node.tar.gz && export PATH=/tmp/reprosmith-tools/node-v22.14.0-linux-x64/bin:$PATH && node --version && corepack pnpm --version`; use wget with the same User-Agent if curl is unavailable. Do not declare the environment blocked until this portable bootstrap has been attempted and its bounded failure is recorded. Prefer npm or corepack for Node, venv and pip for Python, the official Go archive for Go, and rustup with the minimal profile for Rust. Do not use credentials or modify the base image.",
       "Run the smallest reproducer supplied by the issue before installing the whole workspace. Do not run workspace-wide install, build, or test commands when a focused package-level reproducer is sufficient. If the required runtime cannot be installed safely or a bounded dependency install times out, report the environment as blocked; do not retry the same stalled command indefinitely.",
@@ -86,12 +86,15 @@ export function buildReproSmithAgentSpec(config: TrueForgeRuntimeConfig) {
       askUserQuestions: {
         enabled: false
       },
+      generativeUi: {
+        enabled: false
+      },
+      dynamicSubAgents: {
+        enabled: false
+      },
       sandbox: {
         enabled: true,
         fileDownloads: true
-      },
-      dynamicSubAgents: {
-        enabled: true
       }
     },
     mcpServers: [
