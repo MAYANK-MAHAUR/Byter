@@ -149,6 +149,7 @@ function App() {
   const progressLabel = progressLabelFor(displayedStatus);
   const latestQuarantine = run.quarantinedReports[0];
   const candidatePatch = run.candidatePatch;
+  const pullRequest = approval?.pullRequest ?? run.pullRequest;
 
   return (
     <main className="shell">
@@ -270,29 +271,37 @@ function App() {
               </ul>
 
               <div className={`approval-state ${approvalError ? "error" : approval ? "saved" : "idle"}`} role="status">
-                {approvalError ?? approval?.message ?? "Awaiting maintainer decision"}
+                {approvalError ?? approval?.message ?? (pullRequest ? `Draft PR #${pullRequest.number} created` : "Awaiting maintainer decision")}
               </div>
 
-              <div className="approval-actions">
-                {run.approvals.map((action) => {
-                  const Icon = actionIcons[action.impact];
-                  const isPending = pendingAction === action.id;
-                  return (
-                    <button
-                      key={action.id}
-                      type="button"
-                      className={`action-button ${action.impact}`}
-                      disabled={pendingAction !== undefined}
-                      aria-busy={isPending}
-                      onClick={() => void handleApproval(action.id)}
-                    >
-                      <Icon size={18} aria-hidden="true" />
-                      <span>{isPending ? "Saving..." : action.label}</span>
-                      <small>{action.description}</small>
-                    </button>
-                  );
-                })}
-              </div>
+              {pullRequest ? (
+                <a className="pr-link" href={pullRequest.url} target="_blank" rel="noreferrer">
+                  <GitPullRequestArrow size={18} aria-hidden="true" />
+                  Open draft PR #{pullRequest.number}
+                  <ArrowUpRight size={16} aria-hidden="true" />
+                </a>
+              ) : displayedStatus === "awaiting-approval" ? (
+                <div className="approval-actions">
+                  {run.approvals.map((action) => {
+                    const Icon = actionIcons[action.impact];
+                    const isPending = pendingAction === action.id;
+                    return (
+                      <button
+                        key={action.id}
+                        type="button"
+                        className={`action-button ${action.impact}`}
+                        disabled={pendingAction !== undefined}
+                        aria-busy={isPending}
+                        onClick={() => void handleApproval(action.id)}
+                      >
+                        <Icon size={18} aria-hidden="true" />
+                        <span>{isPending ? "Saving..." : action.label}</span>
+                        <small>{action.description}</small>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : undefined}
             </section>
           ) : (
             <section className="approval-panel waiting-panel" aria-label="Run orchestration">

@@ -8,6 +8,7 @@ export interface ApprovalSubmission {
   resultStatus: RunStatus;
   message: string;
   savedAt: string;
+  pullRequest?: { number: number; url: string };
 }
 
 const storagePrefix = "reprosmith:approval:";

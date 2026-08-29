@@ -505,6 +505,25 @@ h3 {
   color: #743333;
 }
 
+.pr-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 42px;
+  padding: 0 13px;
+  border: 1px solid #0f8b6d;
+  background: #e8f7f2;
+  color: #0d4e45;
+  font-size: 0.88rem;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.pr-link:hover {
+  background: #d9f2ea;
+  box-shadow: 0 8px 18px rgba(15, 139, 109, 0.16);
+}
+
 .approval-actions {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

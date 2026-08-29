@@ -43,6 +43,7 @@ export interface DashboardRun extends ReproRun {
     hash: string;
     verifiedAt: string;
   };
+  pullRequest?: { number: number; url: string };
   evidence: EvidenceItem[];
   approvals: ApprovalAction[];
   security: SecurityScanResult;
@@ -76,6 +77,7 @@ interface WebhookRunRecord {
         hash: string;
         verifiedAt: string;
       };
+      pullRequest?: { number: number; url: string };
     };
   };
 }
@@ -189,6 +191,7 @@ export function toDashboardRunFromWebhook(record: WebhookRunRecord): DashboardRu
   const trueForgeStatus = record.trueForge?.status ?? "unknown";
   const liveResult = record.trueForge?.result;
   const livePatch = liveResult?.candidatePatch;
+  const pullRequest = liveResult?.pullRequest;
   const trueForgeDetail =
     record.trueForge?.session?.id ??
     liveResult?.summary ??
@@ -219,6 +222,7 @@ export function toDashboardRunFromWebhook(record: WebhookRunRecord): DashboardRu
           }
         }
       : {}),
+    ...(pullRequest ? { pullRequest } : {}),
     evidence: [
       {
         id: "security-scan",

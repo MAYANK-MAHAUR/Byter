@@ -70,6 +70,7 @@ interface LiveProofResult {
     attempts?: string;
   };
   candidatePatch?: LiveCandidatePatch;
+  pullRequest?: { number: number; url: string };
 }
 
 interface ReproSmithSessionStarter {
@@ -491,7 +492,8 @@ async function handleApproval(
       ...liveRecord.trueForge,
       result: {
         ...liveRecord.trueForge.result!,
-        summary: `${liveRecord.trueForge.result?.summary ?? "Verified candidate patch"} Draft PR created: ${pullRequest.url}`
+        summary: `${liveRecord.trueForge.result?.summary ?? "Verified candidate patch"} Draft PR created: ${pullRequest.url}`,
+        pullRequest
       }
     }
   };
