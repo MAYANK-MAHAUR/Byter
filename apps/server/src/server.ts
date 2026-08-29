@@ -1506,6 +1506,16 @@ function extractLiveProofResult(events: TrueForgeRuntimeEvent[], record: Persist
     .map((outputText) => parseResultJson(clampText(outputText, maxResultTextBytes)))
     .find((candidate): candidate is Record<string, unknown> => candidate !== undefined);
   if (!parsed) {
+    const joinedOutput = outputTexts.join("");
+    console.error("TrueForge completion had no parsable proof contract", JSON.stringify({
+      outputCount: outputTexts.length,
+      outputLengths: outputTexts.map((output) => output.length),
+      joinedLength: joinedOutput.length,
+      hasResultMarker: joinedOutput.includes("reprosmith.result"),
+      hasCandidatePatch: joinedOutput.includes("candidatePatch"),
+      hasKnownStatus: /\"status\"\s*:\s*\"(?:patch-ready|verified|not-reproduced|blocked|failed)\"/.test(joinedOutput),
+      hasJsonObject: joinedOutput.includes("{")
+    }));
     return undefined;
   }
 
