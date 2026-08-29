@@ -284,7 +284,7 @@ export function toDashboardRunFromWebhook(record: WebhookRunRecord): DashboardRu
         }
       : {}),
     ...(pullRequest ? { pullRequest } : {}),
-    ...(liveResult?.proof ? { proof: liveResult.proof } : {}),
+    ...(liveResult?.proof ? { proof: compactProof(liveResult.proof) } : {}),
     harness: {
       model: record.trueForge?.model ?? (trueForgeStatus === "started" || liveResult ? "Configured model" : "Not started"),
       provider: record.trueForge?.provider ?? (trueForgeStatus === "started" || liveResult ? "Configured provider" : "Not started"),
@@ -293,8 +293,8 @@ export function toDashboardRunFromWebhook(record: WebhookRunRecord): DashboardRu
       status: harnessStatusFor(record.run.status, trueForgeStatus, liveResult?.status),
       currentTask: currentTaskFor(record.run.status, liveResult?.summary),
       trace,
-      mcpCalls: trace.filter((event) => event.category === "mcp" && event.toolName).length,
-      sandboxExecutions: trace.filter((event) => event.category === "sandbox" && (event.command || event.sandboxId)).length,
+      mcpCalls: trace.filter((event) => event.category === "mcp" && event.type !== "mcp.initialize").length,
+      sandboxExecutions: trace.filter((event) => event.category === "sandbox" && (event.command || event.sandboxId || event.stdout || event.stderr)).length,
       subagents: trace.filter((event) => event.category === "subagent").length,
       dashboardUrl: record.dashboardUrl,
       statusCommentUrl: record.githubStatusComment?.url
@@ -434,6 +434,20 @@ function currentTaskFor(runStatus: RunStatus, summary?: string): string {
   if (runStatus === "reproducing" || runStatus === "verified") return "Reproducing the issue in the Daytona sandbox";
   if (runStatus === "environment-building") return "Preparing the disposable execution environment";
   return "Triaging the GitHub issue";
+}
+
+function compactProof(proof: { before?: string; after?: string; regressions?: string; attempts?: string }) {
+  return {
+    ...(proof.before ? { before: compactEvidence(proof.before, 360) } : {}),
+    ...(proof.after ? { after: compactEvidence(proof.after, 360) } : {}),
+    ...(proof.regressions ? { regressions: compactEvidence(proof.regressions, 420) } : {}),
+    ...(proof.attempts ? { attempts: compactEvidence(proof.attempts, 160) } : {})
+  };
+}
+
+function compactEvidence(value: string, maxLength: number): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  return compact.length <= maxLength ? compact : `${compact.slice(0, maxLength - 1).trimEnd()}...`;
 }
 
 function buildDemoHarness(summary: DemoRunSummary): HarnessState {
