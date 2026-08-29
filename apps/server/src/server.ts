@@ -1385,12 +1385,12 @@ function projectTrueForgeEvent(event: TrueForgeRuntimeEvent, fallbackIndex = 0):
       id: eventId,
       category: "agent",
       status: "info",
-      summary: summarizeAgentMessage(contentText(raw.content))
+      summary: summarizeAgentMessage(clampText(contentText(raw.content), maxHarnessTextBytes))
     }];
   }
 
   if (type === "tool.response") {
-    const response = parseToolResponse(contentText(raw.content));
+    const response = parseToolResponse(clampText(contentText(raw.content), maxResultTextBytes));
     const isSandbox = response.exitCode !== undefined || typeof response.result === "string";
     const category: HarnessEventCategory = isSandbox ? "sandbox" : "mcp";
     return [{
@@ -1473,7 +1473,8 @@ function summaryForEvent(type: string): string {
 }
 
 function summarizeAgentMessage(value: string): string {
-  const firstLine = redactHarnessText(value.replace(/```[\s\S]*?```/g, "").split("\n").map((line) => line.trim()).find(Boolean) ?? "");
+  const boundedValue = clampText(value, maxHarnessTextBytes);
+  const firstLine = redactHarnessText(boundedValue.replace(/```[\s\S]*?```/g, "").split("\n").map((line) => line.trim()).find(Boolean) ?? "");
   if (!firstLine) return "Agent status update received";
   if (/^(agent finding|observed|evidence|next action|created|reproduced|verified)\b/i.test(firstLine)) {
     return clampText(firstLine, 240);
@@ -1518,8 +1519,9 @@ function firstString(value: Record<string, unknown>, keys: string[]): string | u
 }
 
 function redactHarnessText(value: string): string {
+  const boundedValue = clampText(value, maxHarnessTextBytes);
   return clampText(
-    value
+    boundedValue
       .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer [REDACTED]")
       .replace(/["']?(?:api[_-]?key|token|secret|password)["']?\s*[:=]\s*["']?[^"',\s}]+["']?/gi, "[REDACTED]")
       .replace(/(api[_-]?key|token|secret|password)\s*[:=]\s*[^\s,;]+/gi, "$1=[REDACTED]")
@@ -1537,10 +1539,12 @@ function extractLiveProofResult(events: TrueForgeRuntimeEvent[], record: Persist
     return undefined;
   }
 
-  const streamedDeltaText = events
-    .filter((event) => event.type === "model.message.delta")
-    .flatMap((event) => resultOutputTexts(event.raw))
-    .join("");
+  const streamedDeltaText = joinBoundedTexts(
+    events
+      .filter((event) => event.type === "model.message.delta")
+      .flatMap((event) => resultOutputTexts(event.raw)),
+    maxResultTextBytes
+  );
   const outputTexts = [
     ...doneEvents.flatMap((event) => resultOutputTexts(event.raw)),
     ...(streamedDeltaText ? [streamedDeltaText] : []),
@@ -1617,6 +1621,16 @@ function resultOutputTexts(value: unknown): string[] {
   ];
 
   return candidates.map((candidate) => clampText(contentText(candidate), maxResultTextBytes)).filter((text) => text.length > 0);
+}
+
+function joinBoundedTexts(values: string[], maxBytes: number): string {
+  let result = "";
+  for (const value of values) {
+    const remaining = maxBytes - Buffer.byteLength(result, "utf8");
+    if (remaining <= 0) break;
+    result += clampText(value, remaining);
+  }
+  return result;
 }
 
 function normalizeCandidatePatch(value: unknown, record: PersistedWebhookRunRecord, summary: string): LiveCandidatePatch | undefined {
@@ -1803,8 +1817,10 @@ function isCandidatePatchObject(value: Record<string, unknown>): boolean {
 }
 
 function clampText(value: string, maxBytes: number): string {
-  if (Buffer.byteLength(value, "utf8") <= maxBytes) return value;
-  return Buffer.from(value, "utf8").subarray(0, maxBytes).toString("utf8");
+  if (value.length <= maxBytes && Buffer.byteLength(value, "utf8") <= maxBytes) return value;
+  const prefix = value.slice(0, maxBytes);
+  if (Buffer.byteLength(prefix, "utf8") <= maxBytes) return prefix;
+  return Buffer.from(prefix, "utf8").subarray(0, maxBytes).toString("utf8");
 }
 
 function bearerToken(request: IncomingMessage): string | undefined {
