@@ -254,39 +254,36 @@ describe("ReproSmith production server", () => {
     const staticDir = await mkdtemp(join(tmpdir(), "reprosmith-static-"));
     const liveDataDir = await mkdtemp(join(tmpdir(), "reprosmith-data-"));
     await writeFile(join(staticDir, "index.html"), "<main>ReproSmith</main>", "utf8");
+    const proofText = JSON.stringify({
+      status: "patch-ready",
+      summary: "Reproduced 3/3 and passed the regression check.",
+      proof: { before: "3/3 failed", after: "3/3 passed", regressions: "passed", attempts: "3/3" },
+      candidatePatch: {
+        title: "Fix parser crash",
+        body: "Verified by ReproSmith.",
+        baseBranch: "main",
+        files: [{ path: "src/parser.ts", content: "export const fixed = true;\n" }]
+      }
+    });
     const trueForgeRuntime = {
       startSession: vi.fn().mockResolvedValue({
         session: { id: "session-proof-1", title: null },
         turn: { id: "turn-proof-1", sessionId: "session-proof-1", status: "running" }
       }),
       subscribeToTurn: vi.fn().mockResolvedValue([
-        { sequenceNumber: 1, type: "model.message", raw: {
+        { sequenceNumber: 1, type: "model.message.delta", raw: {
           event: {
-            type: "model.message",
-            content: [
-              {
-                type: "text",
-                text: [
-                  "Proof complete. Candidate patch follows:",
-                  "```json",
-                  JSON.stringify({
-                    status: "patch-ready",
-                    summary: "Reproduced 3/3 and passed the regression check.",
-                    proof: { before: "3/3 failed", after: "3/3 passed", regressions: "passed", attempts: "3/3" },
-                    candidatePatch: {
-                      title: "Fix parser crash",
-                      body: "Verified by ReproSmith.",
-                      baseBranch: "main",
-                      files: [{ path: "src/parser.ts", content: "export const fixed = true;\n" }]
-                    }
-                  }),
-                  "```"
-                ].join("\n")
-              }
-            ]
+            type: "model.message.delta",
+            content: `Proof complete. Candidate patch follows:\n\`\`\`json\n${proofText.slice(0, Math.ceil(proofText.length / 2))}`
           }
         } },
-        { sequenceNumber: 2, type: "turn.done", raw: {
+        { sequenceNumber: 2, type: "model.message.delta", raw: {
+          event: {
+            type: "model.message.delta",
+            content: `${proofText.slice(Math.ceil(proofText.length / 2))}\n\`\`\``
+          }
+        } },
+        { sequenceNumber: 3, type: "turn.done", raw: {
           event: {
             type: "turn.done",
             state: { status: "done" }

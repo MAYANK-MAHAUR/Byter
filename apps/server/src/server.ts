@@ -1294,9 +1294,13 @@ function projectTrueForgeEvent(event: TrueForgeRuntimeEvent, fallbackIndex = 0):
   if (!isRecord(raw)) return [];
 
   const type = typeof raw.type === "string" ? raw.type : event.type;
-  const at = typeof raw.created_at === "string" ? raw.created_at : new Date().toISOString();
+  const at = typeof raw.created_at === "string"
+    ? raw.created_at
+    : typeof raw.createdAt === "string"
+      ? raw.createdAt
+      : new Date().toISOString();
   const eventId = typeof raw.id === "string" ? raw.id : `${event.sequenceNumber ?? "event"}-${type}-${fallbackIndex}`;
-  const toolCalls = Array.isArray(raw.tool_calls) ? raw.tool_calls : [];
+  const toolCalls = Array.isArray(raw.tool_calls) ? raw.tool_calls : Array.isArray(raw.toolCalls) ? raw.toolCalls : [];
   const base = {
     sequenceNumber: event.sequenceNumber,
     at,
@@ -1485,8 +1489,13 @@ function extractLiveProofResult(events: TrueForgeRuntimeEvent[], record: Persist
     return undefined;
   }
 
+  const streamedDeltaText = events
+    .filter((event) => event.type === "model.message.delta")
+    .flatMap((event) => resultOutputTexts(event.raw))
+    .join("");
   const outputTexts = [
     ...resultOutputTexts(done.raw),
+    ...(streamedDeltaText ? [streamedDeltaText] : []),
     ...events
       .filter((event) => event.type === "model.message")
       .reverse()

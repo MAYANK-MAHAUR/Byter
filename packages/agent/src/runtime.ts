@@ -32,7 +32,10 @@ export class ReproSmithTrueForgeRuntime {
       client ??
       (new TrueForge({
         baseUrl: config.baseUrl,
-        ...(config.token ? { token: config.token } : {})
+        ...(config.token ? { token: config.token } : {}),
+        headers: {
+          "User-Agent": "CLINE"
+        }
       }) as unknown as TrueForgeClientLike);
   }
 

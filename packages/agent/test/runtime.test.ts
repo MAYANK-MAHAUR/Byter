@@ -14,6 +14,13 @@ const config = {
 };
 
 describe("ReproSmith TrueForge runtime", () => {
+  it("sends the CLINE user agent required by the TrueForge deployment", () => {
+    const runtime = new ReproSmithTrueForgeRuntime(config);
+    const client = (runtime as unknown as { client: { _options: { headers: Record<string, string> } } }).client;
+
+    expect(client._options.headers["user-agent"]).toBe("CLINE");
+  });
+
   it("builds an inline agent spec with sandbox and subagents enabled", () => {
     const spec = buildReproSmithAgentSpec(config);
 
