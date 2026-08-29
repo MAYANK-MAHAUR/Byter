@@ -3,6 +3,7 @@ import { createReadStream } from "node:fs";
 import { appendFile, mkdir, open, readFile, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { dirname, extname, join, resolve } from "node:path";
+import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { ReproSmithTrueForgeRuntime } from "@reprosmith/agent";
 import {
@@ -1115,20 +1116,26 @@ function expectApprovalAction(value: unknown): ApprovalActionId {
 }
 
 async function deliveryWasProcessed(dataDir: string, deliveryId: string): Promise<boolean> {
+  let input: ReturnType<typeof createReadStream> | undefined;
+  let lines: ReturnType<typeof createInterface> | undefined;
   try {
-    const records = await readFile(join(dataDir, "webhook-runs.jsonl"), "utf8");
-    return records
-      .split("\n")
-      .filter(Boolean)
-      .some((line) => {
-        try {
-          return (JSON.parse(line) as { deliveryId?: string }).deliveryId === deliveryId;
-        } catch {
-          return false;
+    input = createReadStream(join(dataDir, "webhook-runs.jsonl"), { encoding: "utf8" });
+    lines = createInterface({ input, crlfDelay: Infinity });
+    for await (const line of lines) {
+      try {
+        if ((JSON.parse(line) as { deliveryId?: string }).deliveryId === deliveryId) {
+          return true;
         }
-      });
+      } catch {
+        // Ignore a partial or malformed record.
+      }
+    }
+    return false;
   } catch {
     return false;
+  } finally {
+    lines?.close();
+    input?.destroy();
   }
 }
 
@@ -1609,7 +1616,7 @@ function resultOutputTexts(value: unknown): string[] {
     event.tool_calls
   ];
 
-  return candidates.map(contentText).filter((text) => text.length > 0);
+  return candidates.map((candidate) => clampText(contentText(candidate), maxResultTextBytes)).filter((text) => text.length > 0);
 }
 
 function normalizeCandidatePatch(value: unknown, record: PersistedWebhookRunRecord, summary: string): LiveCandidatePatch | undefined {
