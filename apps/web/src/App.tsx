@@ -62,6 +62,18 @@ function App() {
     void loadRun();
   }, []);
 
+  useEffect(() => {
+    if (run?.source !== "webhook") {
+      return undefined;
+    }
+
+    const refreshTimer = window.setInterval(() => {
+      void loadRun();
+    }, 5_000);
+
+    return () => window.clearInterval(refreshTimer);
+  }, [run?.source]);
+
   async function loadRun() {
     setIsRefreshing(true);
     setLoadError(undefined);
