@@ -3,6 +3,7 @@ export interface TrueForgeRuntimeConfig {
   token?: string;
   modelName: string;
   modelProvider?: string;
+  mcpServerName?: string;
 }
 
 export interface TrueForgeSession {

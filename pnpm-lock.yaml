@@ -57,6 +57,9 @@ importers:
       '@reprosmith/github':
         specifier: workspace:*
         version: link:../../packages/github
+      '@reprosmith/github-mcp':
+        specifier: workspace:*
+        version: link:../github-mcp
     devDependencies:
       '@types/node':
         specifier: ^22.0.0

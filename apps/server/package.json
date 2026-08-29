@@ -22,7 +22,8 @@
     "@reprosmith/agent": "workspace:*",
     "@reprosmith/core": "workspace:*",
     "@reprosmith/github": "workspace:*",
-    "@reprosmith/demo-runner": "workspace:*"
+    "@reprosmith/demo-runner": "workspace:*",
+    "@reprosmith/github-mcp": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

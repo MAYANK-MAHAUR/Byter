@@ -20,7 +20,13 @@ describe("ReproSmith TrueForge runtime", () => {
     expect(spec.model.name).toBe("agentrouter/glm-5.3");
     expect(spec.config.sandbox.enabled).toBe(true);
     expect(spec.config.dynamicSubAgents.enabled).toBe(true);
-    expect(spec.mcpServers).toEqual([{ name: "reprosmith-github" }]);
+    expect(spec.mcpServers).toEqual([
+      {
+        name: "reprosmith-github",
+        preload: true,
+        requireApprovalForTools: ["@write", "@destructive"]
+      }
+    ]);
   });
 
   it("builds the initial issue analysis prompt", () => {

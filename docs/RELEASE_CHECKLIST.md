@@ -10,6 +10,7 @@
 - Production server smoke test
 - Signed GitHub issues webhook route
 - Dashboard prefers the latest persisted webhook run and falls back to generated demo proof only when no live run exists
+- Authenticated remote GitHub MCP transport exposes initialize, tools/list, and tools/call
 - Authenticated approval receipt persistence with current-run validation
 - Delivery deduplication for GitHub webhooks
 - Optional webhook-to-TrueForge session handoff path, tested with an injected runtime
@@ -28,6 +29,7 @@
 - Configure the GitHub App webhook URL to `/api/github/webhook`.
 - Run one real signed GitHub issue webhook through the deployed server.
 - Confirm the deployed webhook response includes a started TrueForge session and turn.
+- Verify TrueForge can initialize `/mcp`, discover `reprosmith-github` tools, and complete one read-only tool call.
 - Verify the deployed TrueForge fork sends AgentRouter's Cline-compatible `User-Agent` header.
 - Verify Daytona sandbox creation if Daytona is part of the demo path.
 - Approve one payload-specific GitHub MCP write and confirm a draft PR appears.
