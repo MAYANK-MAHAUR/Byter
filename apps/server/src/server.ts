@@ -3,7 +3,6 @@ import { createReadStream } from "node:fs";
 import { appendFile, mkdir, open, readFile, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { dirname, extname, join, resolve } from "node:path";
-import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { ReproSmithTrueForgeRuntime } from "@reprosmith/agent";
 import {
@@ -961,9 +960,8 @@ function githubCommentStatus(record: PersistedWebhookRunRecord): { label: string
 async function findPersistedRunById(dataDir: string | undefined, runId: string): Promise<PersistedWebhookRunRecord | undefined> {
   if (!dataDir) return undefined;
   try {
-    const contents = await readFile(join(dataDir, "webhook-runs.jsonl"), "utf8");
     let match: PersistedWebhookRunRecord | undefined;
-    for (const line of contents.split("\n").filter(Boolean)) {
+    for await (const line of readJsonlLines(join(dataDir, "webhook-runs.jsonl"))) {
       try {
         const record = JSON.parse(line) as PersistedWebhookRunRecord;
         if (record.run?.id === runId) match = record;
@@ -984,9 +982,8 @@ async function findApprovalReceipt(
   patchHash: string
 ): Promise<ApprovalReceipt | undefined> {
   try {
-    const contents = await readFile(join(dataDir, "approvals.jsonl"), "utf8");
     let match: ApprovalReceipt | undefined;
-    for (const line of contents.split("\n").filter(Boolean)) {
+    for await (const line of readJsonlLines(join(dataDir, "approvals.jsonl"))) {
       try {
         const receipt = JSON.parse(line) as ApprovalReceipt;
         if (receipt.runId === runId && receipt.actionId === actionId && receipt.patchHash === patchHash) {
@@ -1116,26 +1113,57 @@ function expectApprovalAction(value: unknown): ApprovalActionId {
 }
 
 async function deliveryWasProcessed(dataDir: string, deliveryId: string): Promise<boolean> {
-  let input: ReturnType<typeof createReadStream> | undefined;
-  let lines: ReturnType<typeof createInterface> | undefined;
   try {
-    input = createReadStream(join(dataDir, "webhook-runs.jsonl"), { encoding: "utf8" });
-    lines = createInterface({ input, crlfDelay: Infinity });
-    for await (const line of lines) {
-      try {
-        if ((JSON.parse(line) as { deliveryId?: string }).deliveryId === deliveryId) {
-          return true;
-        }
-      } catch {
-        // Ignore a partial or malformed record.
+    const needle = `"deliveryId":${JSON.stringify(deliveryId)}`;
+    for await (const line of readJsonlLines(join(dataDir, "webhook-runs.jsonl"))) {
+      if (line.includes(needle)) {
+        return true;
       }
     }
     return false;
   } catch {
     return false;
+  }
+}
+
+async function* readJsonlLines(path: string): AsyncGenerator<string> {
+  const maxLineBytes = 4 * 1024 * 1024;
+  const input = createReadStream(path, { encoding: "utf8", highWaterMark: 64 * 1024 });
+  let buffer = "";
+  let discardingOversizedLine = false;
+
+  try {
+    for await (const chunk of input) {
+      let nextChunk = chunk as string;
+      if (discardingOversizedLine) {
+        const newline = nextChunk.indexOf("\n");
+        if (newline < 0) continue;
+        discardingOversizedLine = false;
+        nextChunk = nextChunk.slice(newline + 1);
+      }
+
+      buffer += nextChunk;
+      let newline = buffer.indexOf("\n");
+      while (newline >= 0) {
+        const line = buffer.slice(0, newline).replace(/\r$/, "");
+        buffer = buffer.slice(newline + 1);
+        if (Buffer.byteLength(line, "utf8") <= maxLineBytes && line.length > 0) {
+          yield line;
+        }
+        newline = buffer.indexOf("\n");
+      }
+
+      if (Buffer.byteLength(buffer, "utf8") > maxLineBytes) {
+        buffer = "";
+        discardingOversizedLine = true;
+      }
+    }
+
+    if (!discardingOversizedLine && buffer.length > 0 && Buffer.byteLength(buffer, "utf8") <= maxLineBytes) {
+      yield buffer.replace(/\r$/, "");
+    }
   } finally {
-    lines?.close();
-    input?.destroy();
+    input.destroy();
   }
 }
 
