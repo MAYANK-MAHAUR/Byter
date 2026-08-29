@@ -200,6 +200,131 @@ describe("ReproSmith production server", () => {
     }
   });
 
+  it("persists live proof, exposes approval, and creates a PR through approved MCP tools", async () => {
+    const staticDir = await mkdtemp(join(tmpdir(), "reprosmith-static-"));
+    const liveDataDir = await mkdtemp(join(tmpdir(), "reprosmith-data-"));
+    await writeFile(join(staticDir, "index.html"), "<main>ReproSmith</main>", "utf8");
+    const trueForgeRuntime = {
+      startSession: vi.fn().mockResolvedValue({
+        session: { id: "session-proof-1", title: null },
+        turn: { id: "turn-proof-1", sessionId: "session-proof-1", status: "running" }
+      }),
+      subscribeToTurn: vi.fn().mockResolvedValue([
+        { sequenceNumber: 1, type: "turn.done", raw: {
+          event: {
+            type: "turn.done",
+            state: {
+              status: "done",
+              output: {
+                type: "model.message",
+                content: [
+                  {
+                    type: "text",
+                    text: [
+                      "```json",
+                      JSON.stringify({
+                        kind: "reprosmith.result",
+                        status: "patch-ready",
+                        summary: "Reproduced 3/3 and passed the regression check.",
+                        proof: { before: "3/3 failed", after: "3/3 passed", regressions: "passed", attempts: "3/3" },
+                        candidatePatch: {
+                          title: "Fix parser crash",
+                          body: "Verified by ReproSmith.",
+                          baseBranch: "main",
+                          files: [{ path: "src/parser.ts", content: "export const fixed = true;\n" }]
+                        }
+                      }),
+                      "```"
+                    ].join("\n")
+                  }
+                ]
+              }
+            }
+          }
+        } }
+      ])
+    };
+    const githubTools = { callTool: vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: JSON.stringify({ number: 42, url: "https://github.test/pull/42" }) }]
+    }) };
+    const server = createReproSmithServer({ staticDir, dataDir: liveDataDir, trueForgeRuntime, githubTools });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address() as AddressInfo;
+    const isolatedBaseUrl = `http://127.0.0.1:${address.port}`;
+    const payload = JSON.stringify({
+      action: "opened",
+      issue: {
+        number: 21,
+        title: "Parser crash with trailing escape",
+        body: "Trailing escape crashes the parser.",
+        html_url: "https://github.test/o/r/issues/21"
+      },
+      repository: {
+        name: "r",
+        full_name: "o/r",
+        default_branch: "main",
+        owner: { login: "o" }
+      }
+    });
+
+    try {
+      const response = await fetch(`${isolatedBaseUrl}/api/github/webhook`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-GitHub-Event": "issues",
+          "X-GitHub-Delivery": "delivery-proof-21",
+          "X-Hub-Signature-256": signWebhookPayload(payload, "webhook-secret")
+        },
+        body: payload
+      });
+      expect(response.status).toBe(202);
+
+      let latest: any;
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        latest = await fetch(`${isolatedBaseUrl}/api/runs/latest`).then((latestResponse) => latestResponse.json());
+        if (latest.run.status === "awaiting-approval") break;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(latest.run.status).toBe("awaiting-approval");
+      expect(latest.trueForge.result.candidatePatch.files[0].path).toBe("src/parser.ts");
+
+      const approval = await fetch(`${isolatedBaseUrl}/api/approvals`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer approval-token" },
+        body: JSON.stringify({
+          runId: latest.run.id,
+          actionId: "approve-pr",
+          patchHash: latest.trueForge.result.candidatePatch.hash
+        })
+      });
+      const approvalBody = await approval.json();
+
+      expect(approval.status).toBe(200);
+      expect(approvalBody.resultStatus).toBe("pr-created");
+      expect(approvalBody.pullRequest.url).toBe("https://github.test/pull/42");
+      expect(githubTools.callTool).toHaveBeenCalledWith(expect.objectContaining({
+        name: "create_fix_pull_request",
+        approval: expect.objectContaining({ approved: true })
+      }));
+      const duplicateApproval = await fetch(`${isolatedBaseUrl}/api/approvals`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer approval-token" },
+        body: JSON.stringify({
+          runId: latest.run.id,
+          actionId: "approve-pr",
+          patchHash: latest.trueForge.result.candidatePatch.hash
+        })
+      });
+      expect(duplicateApproval.status).toBe(200);
+      expect(githubTools.callTool).toHaveBeenCalledTimes(1);
+      const finalRun = await fetch(`${isolatedBaseUrl}/api/runs/latest`).then((latestResponse) => latestResponse.json());
+      expect(finalRun.run.status).toBe("pr-created");
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    }
+  });
+
   it("deduplicates repeated GitHub delivery IDs", async () => {
     const payload = JSON.stringify({
       action: "opened",

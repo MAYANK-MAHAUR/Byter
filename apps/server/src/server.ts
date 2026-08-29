@@ -5,19 +5,29 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ReproSmithTrueForgeRuntime } from "@reprosmith/agent";
-import { createGitHubMcpHttpHandler } from "@reprosmith/github-mcp";
+import {
+  approvalPayloadHash,
+  createGitHubMcpHttpHandler,
+  createGitHubMcpTools,
+  type GitHubMcpToolResult,
+  type GitHubRestClientLike
+} from "@reprosmith/github-mcp";
 import type {
   StartReproSmithSessionInput,
   StartReproSmithSessionResult,
   TrueForgeRuntimeEvent
 } from "@reprosmith/agent";
-import { createRun, scanIssueText, transitionRun } from "@reprosmith/core";
+import { canTransition, createRun, scanIssueText, transitionRun } from "@reprosmith/core";
 import { runDemo, type DemoRunSummary } from "@reprosmith/demo-runner";
 import { GitHubRestClient, parseIssueWebhook, verifyGitHubWebhook } from "@reprosmith/github";
 
 type ApprovalActionId = "approve-pr" | "request-diff" | "reject-run";
 const maxRequestBodyBytes = 64 * 1024;
 const maxLatestRunReadBytes = 256 * 1024;
+const maxResultTextBytes = 256 * 1024;
+const maxPatchFiles = 40;
+const maxPatchFileBytes = 512 * 1024;
+const maxPatchTotalBytes = 2 * 1024 * 1024;
 const demoCacheTtlMs = 5_000;
 let demoCache: { createdAt: number; summary: DemoRunSummary } | undefined;
 let demoInFlight: Promise<DemoRunSummary> | undefined;
@@ -27,9 +37,40 @@ export interface ReproSmithServerOptions {
   dataDir?: string;
   trueForgeRuntime?: ReproSmithSessionStarter;
   mcpHandler?: McpRequestHandler;
+  githubTools?: GitHubWriteTools;
 }
 
 type McpRequestHandler = (request: IncomingMessage, response: ServerResponse) => Promise<void>;
+
+interface GitHubWriteTools {
+  callTool(call: {
+    name: "create_fix_pull_request";
+    arguments: Record<string, unknown>;
+    approval: { approved: boolean; expectedPayloadHash: string };
+  }): Promise<GitHubMcpToolResult>;
+}
+
+interface LiveCandidatePatch {
+  title: string;
+  body: string;
+  baseBranch: string;
+  branchName: string;
+  files: Array<{ path: string; content: string }>;
+  hash: string;
+  verifiedAt: string;
+}
+
+interface LiveProofResult {
+  status: "patch-ready" | "verified" | "not-reproduced" | "blocked" | "failed";
+  summary: string;
+  proof?: {
+    before?: string;
+    after?: string;
+    regressions?: string;
+    attempts?: string;
+  };
+  candidatePatch?: LiveCandidatePatch;
+}
 
 interface ReproSmithSessionStarter {
   startSession(input: StartReproSmithSessionInput): Promise<StartReproSmithSessionResult>;
@@ -41,10 +82,11 @@ interface PersistedWebhookRunRecord {
   receivedAt: string;
   deliveryId: string;
   repository: string;
+  baseBranch: string;
   issueTitle: string;
   issueBody: string;
   run: ReturnType<typeof createRun>;
-  scan: ReturnType<typeof scanIssueText>;
+    scan: ReturnType<typeof scanIssueText>;
   trueForge: {
     status: string;
     reason?: string;
@@ -52,6 +94,7 @@ interface PersistedWebhookRunRecord {
     session?: { id: string; title: string | null };
     turn?: { id: string; status: string };
     events?: Array<{ sequenceNumber?: number; type: string }>;
+    result?: LiveProofResult;
   };
 }
 
@@ -59,7 +102,9 @@ export function createReproSmithServer(options: ReproSmithServerOptions = {}): S
   const staticDir = resolve(options.staticDir ?? process.env.STATIC_DIR ?? defaultStaticDir());
   const dataDir = options.dataDir ?? process.env.DATA_DIR;
   const trueForgeRuntime = options.trueForgeRuntime ?? trueForgeRuntimeFromEnv();
-  const mcpHandler = options.mcpHandler ?? githubMcpHandlerFromEnv();
+  const githubClient = githubClientFromEnv();
+  const githubTools = options.githubTools ?? (githubClient ? createGitHubMcpTools({ client: githubClient }) : undefined);
+  const mcpHandler = options.mcpHandler ?? githubMcpHandlerFromEnv(githubClient);
 
   return createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
@@ -90,7 +135,7 @@ export function createReproSmithServer(options: ReproSmithServerOptions = {}): S
       }
 
       if (url.pathname === "/api/approvals") {
-        await handleApproval(request, response, dataDir ? resolve(dataDir) : undefined);
+        await handleApproval(request, response, dataDir ? resolve(dataDir) : undefined, githubTools);
         return;
       }
 
@@ -192,6 +237,7 @@ async function handleGitHubWebhook(
     receivedAt: new Date().toISOString(),
     deliveryId,
     repository: webhook.repository.full_name,
+    baseBranch: webhook.repository.default_branch,
     issueTitle: webhook.issue.title,
     issueBody: webhook.issue.body ?? "",
     run,
@@ -306,7 +352,8 @@ async function handleDemoRun(request: IncomingMessage, response: ServerResponse)
 async function handleApproval(
   request: IncomingMessage,
   response: ServerResponse,
-  dataDir: string | undefined
+  dataDir: string | undefined,
+  githubTools: GitHubWriteTools | undefined
 ): Promise<void> {
   if (request.method !== "POST") {
     sendJson(response, 405, { error: "Method not allowed" });
@@ -333,29 +380,237 @@ async function handleApproval(
   const actionId = expectApprovalAction(payload.actionId);
   const runId = expectString(payload.runId, "runId");
   const patchHash = expectString(payload.patchHash, "patchHash");
-  const latestRun = await getDemoRun();
-  if (latestRun.run.id !== runId || latestRun.candidatePatch.hash !== patchHash) {
-    sendJson(response, 409, { error: "Approval payload does not match the current run" });
+  const liveRecord = await findPersistedRunById(dataDir, runId);
+  if (!liveRecord) {
+    const latestRun = await getDemoRun();
+    if (latestRun.run.id !== runId || latestRun.candidatePatch.hash !== patchHash) {
+      sendJson(response, 409, { error: "Approval payload does not match the current run" });
+      return;
+    }
+
+    const receipt = buildApprovalReceipt(runId, actionId, patchHash, resultStatusFor(actionId), messageFor(actionId));
+    await appendApprovalReceipt(dataDir, receipt);
+    sendJson(response, 200, receipt);
     return;
   }
 
+  const candidatePatch = liveRecord.trueForge.result?.candidatePatch;
+  if (!candidatePatch || candidatePatch.hash !== patchHash) {
+    sendJson(response, 409, { error: "Approval payload does not match the live candidate patch" });
+    return;
+  }
+  const previousReceipt = await findApprovalReceipt(dataDir, runId, actionId, patchHash);
+  if (previousReceipt?.resultStatus === "writing") {
+    sendJson(response, 409, { error: "This approval is already being processed" });
+    return;
+  }
+  if (previousReceipt && previousReceipt.resultStatus !== "write-failed") {
+    sendJson(response, 200, previousReceipt);
+    return;
+  }
+  if (liveRecord.run.status !== "awaiting-approval") {
+    sendJson(response, 409, { error: "Live run is not awaiting approval" });
+    return;
+  }
+
+  if (actionId !== "approve-pr") {
+    let run = liveRecord.run;
+    if (actionId === "reject-run" && canTransition(run.status, "rejected")) {
+      run = transitionRun(run, "rejected", "Maintainer rejected the live candidate patch");
+    }
+    const receipt = buildApprovalReceipt(runId, actionId, patchHash, resultStatusFor(actionId), messageFor(actionId));
+    await appendApprovalReceipt(dataDir, receipt);
+    await appendUpdatedLiveRecord(dataDir, { ...liveRecord, run });
+    sendJson(response, 200, receipt);
+    return;
+  }
+
+  if (!githubTools) {
+    sendJson(response, 503, { error: "GitHub write tools are not configured" });
+    return;
+  }
+
+  const writeArguments = {
+    owner: liveRecord.run.issue.owner,
+    repo: liveRecord.run.issue.repo,
+    baseBranch: candidatePatch.baseBranch,
+    branchName: candidatePatch.branchName,
+    title: candidatePatch.title,
+    body: candidatePatch.body,
+    files: candidatePatch.files
+  };
+  const expectedPayloadHash = approvalPayloadHash("create_fix_pull_request", writeArguments);
+  if (expectedPayloadHash !== candidatePatch.hash) {
+    sendJson(response, 409, { error: "Live candidate patch hash is invalid" });
+    return;
+  }
+
+  const writingReceipt = buildApprovalReceipt(
+    runId,
+    actionId,
+    patchHash,
+    "writing",
+    "Approval accepted; creating a draft GitHub pull request"
+  );
+  await appendApprovalReceipt(dataDir, writingReceipt);
+
+  let toolResult: GitHubMcpToolResult;
+  try {
+    toolResult = await githubTools.callTool({
+      name: "create_fix_pull_request",
+      arguments: writeArguments,
+      approval: { approved: true, expectedPayloadHash }
+    });
+  } catch (error) {
+    const failedReceipt = buildApprovalReceipt(
+      runId,
+      actionId,
+      patchHash,
+      "write-failed",
+      error instanceof Error ? error.message : "GitHub pull request creation failed"
+    );
+    await appendApprovalReceipt(dataDir, failedReceipt);
+    sendJson(response, 502, { error: failedReceipt.message });
+    return;
+  }
+
+  const pullRequest = parsePullRequestToolResult(toolResult);
+  let run = liveRecord.run;
+  if (canTransition(run.status, "approved")) {
+    run = transitionRun(run, "approved", "Maintainer approved the verified candidate patch");
+  }
+  if (canTransition(run.status, "pr-created")) {
+    run = transitionRun(run, "pr-created", "Draft GitHub pull request created", {
+      evidence: { pullRequestUrl: pullRequest.url, pullRequestNumber: pullRequest.number }
+    });
+  }
+  const updatedRecord: PersistedWebhookRunRecord = {
+    ...liveRecord,
+    run,
+    trueForge: {
+      ...liveRecord.trueForge,
+      result: {
+        ...liveRecord.trueForge.result!,
+        summary: `${liveRecord.trueForge.result?.summary ?? "Verified candidate patch"} Draft PR created: ${pullRequest.url}`
+      }
+    }
+  };
+  await appendUpdatedLiveRecord(dataDir, updatedRecord);
+  const receipt = buildApprovalReceipt(
+    runId,
+    actionId,
+    patchHash,
+    "pr-created",
+    "Draft GitHub pull request created",
+    { pullRequest }
+  );
+  await appendApprovalReceipt(dataDir, receipt);
+  sendJson(response, 200, receipt);
+}
+
+interface ApprovalReceipt {
+  id: string;
+  runId: string;
+  actionId: ApprovalActionId;
+  actor: string;
+  approvedPayloadHash: string;
+  patchHash: string;
+  resultStatus: string;
+  message: string;
+  savedAt: string;
+  pullRequest?: { number: number; url: string };
+}
+
+function buildApprovalReceipt(
+  runId: string,
+  actionId: ApprovalActionId,
+  patchHash: string,
+  resultStatus: string,
+  message: string,
+  extra: Pick<ApprovalReceipt, "pullRequest"> = {}
+): ApprovalReceipt {
   const savedAt = new Date().toISOString();
-  const receipt = {
-    id: createHash("sha256").update(`${runId}:${actionId}:${patchHash}:${savedAt}`).digest("hex").slice(0, 16),
+  return {
+    id: createHash("sha256").update(`${runId}:${actionId}:${patchHash}:${resultStatus}:${savedAt}`).digest("hex").slice(0, 16),
     runId,
     actionId,
     actor: "token-authenticated maintainer",
     approvedPayloadHash: createHash("sha256").update(`${runId}:${actionId}:${patchHash}`).digest("hex"),
     patchHash,
-    resultStatus: resultStatusFor(actionId),
-    message: messageFor(actionId),
-    savedAt
+    resultStatus,
+    message,
+    savedAt,
+    ...extra
   };
+}
 
+async function appendApprovalReceipt(dataDir: string, receipt: ApprovalReceipt): Promise<void> {
   await mkdir(dataDir, { recursive: true });
   await appendFile(join(dataDir, "approvals.jsonl"), `${JSON.stringify(receipt)}\n`, "utf8");
+}
 
-  sendJson(response, 200, receipt);
+async function appendUpdatedLiveRecord(dataDir: string, record: PersistedWebhookRunRecord): Promise<void> {
+  await mkdir(dataDir, { recursive: true });
+  await appendFile(join(dataDir, "webhook-runs.jsonl"), `${JSON.stringify(record)}\n`, "utf8");
+}
+
+async function findPersistedRunById(dataDir: string | undefined, runId: string): Promise<PersistedWebhookRunRecord | undefined> {
+  if (!dataDir) return undefined;
+  try {
+    const contents = await readFile(join(dataDir, "webhook-runs.jsonl"), "utf8");
+    let match: PersistedWebhookRunRecord | undefined;
+    for (const line of contents.split("\n").filter(Boolean)) {
+      try {
+        const record = JSON.parse(line) as PersistedWebhookRunRecord;
+        if (record.run?.id === runId) match = record;
+      } catch {
+        // Ignore a partial or malformed line.
+      }
+    }
+    return match;
+  } catch {
+    return undefined;
+  }
+}
+
+async function findApprovalReceipt(
+  dataDir: string,
+  runId: string,
+  actionId: ApprovalActionId,
+  patchHash: string
+): Promise<ApprovalReceipt | undefined> {
+  try {
+    const contents = await readFile(join(dataDir, "approvals.jsonl"), "utf8");
+    let match: ApprovalReceipt | undefined;
+    for (const line of contents.split("\n").filter(Boolean)) {
+      try {
+        const receipt = JSON.parse(line) as ApprovalReceipt;
+        if (receipt.runId === runId && receipt.actionId === actionId && receipt.patchHash === patchHash) {
+          match = receipt;
+        }
+      } catch {
+        // Ignore a partial or malformed line.
+      }
+    }
+    return match;
+  } catch {
+    return undefined;
+  }
+}
+
+function parsePullRequestToolResult(result: GitHubMcpToolResult): { number: number; url: string } {
+  const text = result.content.find((item) => item.type === "text")?.text;
+  if (!text) throw new Error("GitHub PR tool returned no result");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text) as unknown;
+  } catch {
+    throw new Error("GitHub PR tool returned an invalid result");
+  }
+  if (!isRecord(parsed) || typeof parsed.number !== "number" || typeof parsed.url !== "string") {
+    throw new Error("GitHub PR tool result did not include a pull request");
+  }
+  return { number: parsed.number, url: parsed.url };
 }
 
 async function serveStatic(pathname: string, response: ServerResponse, staticDir: string): Promise<void> {
@@ -566,15 +821,24 @@ async function monitorTrueForgeTurn(
       type: event.type
     }));
     const completed = events.some((event) => event.type === "turn.done");
+    const result = completed ? extractLiveProofResult(events, record) : undefined;
+    let run = record.run;
+    if (completed && result) {
+      run = applyLiveProofResult(run, result);
+    } else if (completed && canTransition(run.status, "failed")) {
+      run = transitionRun(run, "failed", "TrueForge completed without a valid reprosmith.result contract");
+    }
     await appendFile(
       join(dataDir, "webhook-runs.jsonl"),
       `${JSON.stringify({
         ...record,
+        run,
         trueForge: {
           ...record.trueForge,
           status: completed ? "completed" : "started",
           ...(completed ? {} : { error: "TrueForge turn is still running; completion has not been observed" }),
-          events: eventMetadata
+          events: eventMetadata,
+          ...(result ? { result } : {})
         }
       })}\n`,
       "utf8"
@@ -599,6 +863,183 @@ async function monitorTrueForgeTurn(
       "utf8"
     );
   }
+}
+
+function extractLiveProofResult(events: TrueForgeRuntimeEvent[], record: PersistedWebhookRunRecord): LiveProofResult | undefined {
+  const done = [...events].reverse().find((event) => event.type === "turn.done");
+  if (!done) {
+    return undefined;
+  }
+
+  const event = unwrapRuntimeEvent(done.raw);
+  const state = isRecord(event) && isRecord(event.state) ? event.state : undefined;
+  const output = state && isRecord(state.output) ? state.output : undefined;
+  const outputText = clampText(output ? contentText(output.content) : "", maxResultTextBytes);
+  const parsed = parseResultJson(outputText);
+  if (!parsed || parsed.kind !== "reprosmith.result") {
+    return undefined;
+  }
+
+  const status = parseLiveResultStatus(parsed.status);
+  if (!status) {
+    return undefined;
+  }
+
+  const summary = clampText(typeof parsed.summary === "string" ? parsed.summary : `TrueForge reported ${status}`, 2_000);
+  const proof = isRecord(parsed.proof)
+    ? {
+        ...(typeof parsed.proof.before === "string" ? { before: clampText(parsed.proof.before, 2_000) } : {}),
+        ...(typeof parsed.proof.after === "string" ? { after: clampText(parsed.proof.after, 2_000) } : {}),
+        ...(typeof parsed.proof.regressions === "string" ? { regressions: clampText(parsed.proof.regressions, 2_000) } : {}),
+        ...(typeof parsed.proof.attempts === "string" ? { attempts: clampText(parsed.proof.attempts, 200) } : {})
+      }
+    : undefined;
+  const candidatePatch = status === "patch-ready" || status === "verified"
+    ? normalizeCandidatePatch(parsed.candidatePatch, record, summary)
+    : undefined;
+
+  return {
+    status: candidatePatch ? "patch-ready" : status,
+    summary,
+    ...(proof && Object.keys(proof).length > 0 ? { proof } : {}),
+    ...(candidatePatch ? { candidatePatch } : {})
+  };
+}
+
+function normalizeCandidatePatch(value: unknown, record: PersistedWebhookRunRecord, summary: string): LiveCandidatePatch | undefined {
+  if (!isRecord(value) || typeof value.title !== "string" || typeof value.body !== "string" || !Array.isArray(value.files)) {
+    return undefined;
+  }
+  if (value.files.length === 0 || value.files.length > maxPatchFiles) {
+    return undefined;
+  }
+
+  const files: Array<{ path: string; content: string }> = [];
+  let totalBytes = 0;
+  for (const file of value.files) {
+    if (!isRecord(file) || typeof file.path !== "string" || typeof file.content !== "string") {
+      return undefined;
+    }
+    if (
+      file.path.length === 0 ||
+      file.path.startsWith("/") ||
+      file.path.includes("\\") ||
+      file.path.split("/").some((segment) => segment.length === 0 || segment === "." || segment === "..")
+    ) {
+      return undefined;
+    }
+    const fileBytes = Buffer.byteLength(file.content, "utf8");
+    totalBytes += fileBytes;
+    if (fileBytes > maxPatchFileBytes || totalBytes > maxPatchTotalBytes) {
+      return undefined;
+    }
+    files.push({ path: file.path, content: file.content });
+  }
+
+  const baseBranch = record.baseBranch;
+  const branchName = `reprosmith/fix-${record.run.issue.issueNumber}-${createHash("sha256")
+    .update(record.deliveryId)
+    .digest("hex")
+    .slice(0, 10)}`;
+  const writeArguments = {
+    owner: record.run.issue.owner,
+    repo: record.run.issue.repo,
+    baseBranch,
+    branchName,
+    title: clampText(value.title, 200),
+    body: clampText(value.body || summary, 10_000),
+    files
+  };
+
+  return {
+    title: writeArguments.title,
+    body: writeArguments.body,
+    baseBranch: writeArguments.baseBranch,
+    branchName: writeArguments.branchName,
+    files: writeArguments.files,
+    hash: approvalPayloadHash("create_fix_pull_request", writeArguments),
+    verifiedAt: new Date().toISOString()
+  };
+}
+
+function applyLiveProofResult(run: ReturnType<typeof createRun>, result: LiveProofResult) {
+  if (result.candidatePatch) {
+    for (const status of ["reproducing", "verified", "minimizing", "fixing", "validating", "patch-ready", "awaiting-approval"] as const) {
+      if (canTransition(run.status, status)) {
+        run = transitionRun(run, status, `TrueForge proof: ${status}`, {
+          evidence: { summary: result.summary, ...(result.proof ? { proof: result.proof } : {}) }
+        });
+      }
+    }
+    return run;
+  }
+
+  if (result.status === "not-reproduced" && canTransition(run.status, "reproducing")) {
+    run = transitionRun(run, "reproducing", "TrueForge attempted reproduction");
+    if (canTransition(run.status, "not-reproduced")) {
+      return transitionRun(run, "not-reproduced", result.summary);
+    }
+  }
+  if (result.status === "verified" && canTransition(run.status, "reproducing")) {
+    run = transitionRun(run, "reproducing", "TrueForge reproduced the issue");
+    if (canTransition(run.status, "verified")) {
+      return transitionRun(run, "verified", result.summary);
+    }
+  }
+  if ((result.status === "blocked" || result.status === "failed") && canTransition(run.status, "failed")) {
+    return transitionRun(run, "failed", result.summary);
+  }
+  return run;
+}
+
+function parseLiveResultStatus(value: unknown): LiveProofResult["status"] | undefined {
+  return value === "patch-ready" || value === "verified" || value === "not-reproduced" || value === "blocked" || value === "failed"
+    ? value
+    : undefined;
+}
+
+function unwrapRuntimeEvent(value: unknown): unknown {
+  return isRecord(value) && isRecord(value.event) ? value.event : value;
+}
+
+function contentText(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (!Array.isArray(value)) {
+    return "";
+  }
+  return value
+    .map((part) => {
+      if (typeof part === "string") return part;
+      if (isRecord(part) && typeof part.text === "string") return part.text;
+      return "";
+    })
+    .join("");
+}
+
+function parseResultJson(text: string): Record<string, unknown> | undefined {
+  const candidates: string[] = [];
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced?.[1]) candidates.push(fenced[1]);
+  const firstBrace = text.indexOf("{");
+  const lastBrace = text.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) candidates.push(text.slice(firstBrace, lastBrace + 1));
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate.trim()) as unknown;
+      if (isRecord(parsed)) return parsed;
+    } catch {
+      // Try the next bounded candidate.
+    }
+  }
+  return undefined;
+}
+
+function clampText(value: string, maxBytes: number): string {
+  if (Buffer.byteLength(value, "utf8") <= maxBytes) return value;
+  return Buffer.from(value, "utf8").subarray(0, maxBytes).toString("utf8");
 }
 
 function bearerToken(request: IncomingMessage): string | undefined {
@@ -676,15 +1117,17 @@ class HttpError extends Error {
   }
 }
 
-function githubMcpHandlerFromEnv(): McpRequestHandler | undefined {
+function githubClientFromEnv(): GitHubRestClientLike | undefined {
   const githubToken = process.env.GITHUB_TOKEN;
+  return githubToken ? new GitHubRestClient({ token: githubToken }) : undefined;
+}
+
+function githubMcpHandlerFromEnv(githubClient: GitHubRestClientLike | undefined): McpRequestHandler | undefined {
   const mcpAuthToken = process.env.MCP_AUTH_TOKEN;
-  if (!githubToken || !mcpAuthToken) {
-    return undefined;
-  }
+  if (!githubClient || !mcpAuthToken) return undefined;
 
   return createGitHubMcpHttpHandler({
-    client: new GitHubRestClient({ token: githubToken }),
+    client: githubClient,
     authToken: mcpAuthToken
   });
 }
@@ -707,4 +1150,8 @@ function trueForgeRuntimeFromEnv(): ReproSmithSessionStarter | undefined {
 
 function defaultStaticDir(): string {
   return resolve(dirname(fileURLToPath(import.meta.url)), "../../web/dist");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

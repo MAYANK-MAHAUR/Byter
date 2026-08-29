@@ -63,6 +63,20 @@ interface WebhookRunRecord {
     error?: string;
     session?: { id?: string; title?: string | null };
     turn?: { id?: string; status?: string };
+    result?: {
+      status?: string;
+      summary?: string;
+      proof?: { before?: string; after?: string; regressions?: string; attempts?: string };
+      candidatePatch?: {
+        title: string;
+        body: string;
+        baseBranch: string;
+        branchName: string;
+        files: Array<{ path: string; content: string }>;
+        hash: string;
+        verifiedAt: string;
+      };
+    };
   };
 }
 
@@ -173,12 +187,15 @@ export function toDashboardRun(summary: DemoRunSummary): DashboardRun {
 
 export function toDashboardRunFromWebhook(record: WebhookRunRecord): DashboardRun {
   const trueForgeStatus = record.trueForge?.status ?? "unknown";
+  const liveResult = record.trueForge?.result;
+  const livePatch = liveResult?.candidatePatch;
   const trueForgeDetail =
     record.trueForge?.session?.id ??
+    liveResult?.summary ??
     record.trueForge?.reason ??
     record.trueForge?.error ??
     "No TrueForge metadata returned";
-  const trueForgeBlocked = trueForgeStatus === "failed" || trueForgeStatus === "not-configured";
+  const trueForgeBlocked = trueForgeStatus === "failed" || trueForgeStatus === "not-configured" || liveResult?.status === "failed";
   const issueBodySize = new Blob([record.issueBody]).size;
 
   return {
@@ -188,10 +205,20 @@ export function toDashboardRunFromWebhook(record: WebhookRunRecord): DashboardRu
     sourceLabel: "latest GitHub webhook",
     repoLabel: record.repository.replace("/", " / "),
     issueTitle: record.issueTitle,
-    assignee: trueForgeStatus === "started" ? "TrueForge agent" : "Server intake",
-    runtime: trueForgeStatus === "started" ? "TrueForge Agent Harness" : "Webhook intake",
-    model: trueForgeStatus === "started" ? "Configured by TrueForge" : "Not started",
-    currentBranch: `delivery ${record.deliveryId}`,
+    assignee: trueForgeStatus === "started" || liveResult ? "TrueForge agent" : "Server intake",
+    runtime: trueForgeStatus === "started" || liveResult ? "TrueForge Agent Harness" : "Webhook intake",
+    model: trueForgeStatus === "started" || liveResult ? "Configured by TrueForge" : "Not started",
+    currentBranch: livePatch?.branchName ?? `delivery ${record.deliveryId}`,
+    ...(livePatch
+      ? {
+          candidatePatch: {
+            title: livePatch.title,
+            files: livePatch.files.map((file) => file.path),
+            hash: livePatch.hash,
+            verifiedAt: livePatch.verifiedAt
+          }
+        }
+      : {}),
     evidence: [
       {
         id: "security-scan",
@@ -207,8 +234,22 @@ export function toDashboardRunFromWebhook(record: WebhookRunRecord): DashboardRu
         title: "TrueForge handoff",
         value: trueForgeStatus,
         detail: trueForgeDetail,
-        status: trueForgeBlocked ? "blocked" : trueForgeStatus === "started" ? "verified" : "warning"
+        status: trueForgeBlocked ? "blocked" : liveResult ? "verified" : trueForgeStatus === "started" ? "verified" : "warning"
       },
+      ...(liveResult?.proof
+        ? [
+            {
+              id: "proof-result",
+              kind: "stdout" as const,
+              title: "Live proof result",
+              value: liveResult.status ?? "unknown",
+              detail: [liveResult.proof.attempts, liveResult.proof.before, liveResult.proof.after, liveResult.proof.regressions]
+                .filter(Boolean)
+                .join(" | "),
+              status: liveResult.status === "patch-ready" || liveResult.status === "verified" ? ("verified" as const) : ("warning" as const)
+            }
+          ]
+        : []),
       {
         id: "issue-payload",
         kind: "stack",
@@ -218,7 +259,7 @@ export function toDashboardRunFromWebhook(record: WebhookRunRecord): DashboardRu
         status: "verified"
       }
     ],
-    approvals: [],
+    approvals: record.run.status === "awaiting-approval" && livePatch ? approvalActions : [],
     security: record.scan,
     quarantinedReports: record.scan.findings.length
       ? [

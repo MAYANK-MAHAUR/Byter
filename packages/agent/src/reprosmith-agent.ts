@@ -11,7 +11,8 @@ export function buildReproSmithAgentSpec(config: TrueForgeRuntimeConfig) {
       "Use GitHub MCP tools for repository context.",
       "Use sandbox execution to reproduce failures.",
       "Require human approval before any GitHub write.",
-      "Stop and report evidence when execution is blocked by security policy."
+      "Stop and report evidence when execution is blocked by security policy.",
+      "When the work is complete, return exactly one JSON object in a fenced json block with kind=\"reprosmith.result\". Include status (patch-ready, verified, not-reproduced, blocked, or failed), summary, proof (before, after, regressions, and attempts when known), and candidatePatch only when a concrete fix is verified. candidatePatch must contain title, body, and files; every file must contain the exact final path and full content. Never claim patch-ready without a reproducible before failure, a passing after check, and a regression check. Do not call GitHub write tools; stop before mutation."
     ].join("\n"),
     config: {
       iterationLimit: 64,
@@ -50,6 +51,10 @@ export function buildInitialUserMessage(input: StartReproSmithSessionInput): str
     "2. Read repository context through GitHub MCP.",
     "3. Execute a reproducer in sandbox.",
     "4. Require the same target failure 3/3 before verification.",
-    "5. Pause before any GitHub mutation."
+    "5. Prepare a complete candidatePatch with exact final file contents if the fix is verified.",
+    "6. Pause before any GitHub mutation.",
+    "7. Finish with exactly one fenced JSON object using this shape:",
+    '{"kind":"reprosmith.result","status":"patch-ready","summary":"...","proof":{"before":"...","after":"...","regressions":"...","attempts":"3/3"},"candidatePatch":{"title":"...","body":"...","files":[{"path":"src/file.ts","content":"full file content"}]}}',
+    "Use status=not-reproduced, blocked, or failed and omit candidatePatch when proof is incomplete."
   ].join("\n");
 }
