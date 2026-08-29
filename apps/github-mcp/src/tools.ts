@@ -15,7 +15,8 @@ export interface GitHubRestClientLike {
     content: string;
   }>;
   addLabels(owner: string, repo: string, issueNumber: number, labels: string[]): Promise<void>;
-  createIssueComment(owner: string, repo: string, issueNumber: number, body: string): Promise<{ html_url: string }>;
+  createIssueComment(owner: string, repo: string, issueNumber: number, body: string): Promise<{ html_url: string; id?: number }>;
+  updateIssueComment?(owner: string, repo: string, commentId: number, body: string): Promise<{ html_url: string; id?: number }>;
   getBranch(owner: string, repo: string, branch: string): Promise<{ commit: { sha: string } }>;
   createBranch(owner: string, repo: string, branch: string, sha: string): Promise<void>;
   deleteBranch(owner: string, repo: string, branch: string): Promise<void>;

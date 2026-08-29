@@ -26,6 +26,9 @@ GITHUB_PRIVATE_KEY=<pem-or-escaped-pem>
 GITHUB_WEBHOOK_SECRET=<secret>
 GITHUB_CLIENT_ID=<id>
 GITHUB_CLIENT_SECRET=<secret>
+APP_BASE_URL=https://<byter-railway-domain>
+REPROSMITH_REQUIRE_TRIGGER_LABEL=true
+REPROSMITH_TRIGGER_LABEL=reprosmith:run
 ```
 
 Do not commit real values.
@@ -72,7 +75,12 @@ After setting `TRUEFORGE_URL` and `TRUEFORGE_API_KEY`, send one signed test issu
 
 If `trueForge.status` is `not-configured`, the server accepted and persisted the webhook but did not start live orchestration.
 
-Refresh the dashboard after the signed delivery. The deployed server serves the built dashboard and its API from the same origin, so the dashboard reads /api/runs/latest and sends approvals to /api/approvals without a Vite mock layer. /api/demo-run is available only when the web build is explicitly configured with VITE_REPROSMITH_DATA_MODE=demo.
+Refresh the dashboard after the signed delivery. The deployed server serves the built dashboard and its API from the same origin, so the dashboard reads `/api/runs/latest` and sends approvals to `/api/approvals` without a Vite mock layer. Each run also has `/api/runs/:runId` and `/runs/:runId` routes for reconnecting to a specific record. `/api/demo-run` is available only when the web build is explicitly configured with `VITE_REPROSMITH_DATA_MODE=demo`.
+
+The server creates one status comment on the source issue when the run starts,
+then updates that same comment at completion and after approval or rejection.
+The comment links to the permanent run route and never includes credentials,
+raw provider events, or private model reasoning.
 
 For a separately hosted web build, set VITE_REPROSMITH_API_URL=https://<railway-domain> at build time. For local Vite development, set REPROSMITH_API_TARGET=http://127.0.0.1:8787 and run the production server on port 8787; the Vite server proxies API and MCP requests to it.
 
@@ -81,6 +89,10 @@ For a separately hosted web build, set VITE_REPROSMITH_API_URL=https://<railway-
 The production server currently persists approval and webhook records as JSONL files under `DATA_DIR`. Use a mounted volume for demos. For longer-running production, replace this with Postgres or another durable store.
 
 The deployed TrueForge service must handle AgentRouter's required Cline-compatible request headers on model-provider calls.
+
+Set `REPROSMITH_REQUIRE_TRIGGER_LABEL=true` to avoid starting a live run for
+every issue. The issue form supplies `reprosmith:run`; `/reprosmith run` in the
+issue body is also accepted as an explicit marker.
 
 ## TrueForge MCP setup
 

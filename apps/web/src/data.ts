@@ -27,6 +27,44 @@ export interface QuarantinedReport {
   security: SecurityScanResult;
 }
 
+export type HarnessEventCategory = "session" | "agent" | "mcp" | "sandbox" | "subagent" | "github" | "approval";
+
+export interface HarnessTraceEvent {
+  id: string;
+  sequenceNumber?: number;
+  at: string;
+  type: string;
+  category: HarnessEventCategory;
+  source: "trueforge" | "reprosmith";
+  status: "info" | "running" | "passed" | "failed";
+  summary: string;
+  toolName?: string;
+  mcpServer?: string;
+  target?: string;
+  command?: string;
+  exitCode?: number | null;
+  stdout?: string;
+  stderr?: string;
+  sandboxId?: string;
+  subagent?: string;
+  artifact?: string;
+}
+
+export interface HarnessState {
+  model: string;
+  provider: string;
+  sessionId?: string;
+  turnId?: string;
+  status: "running" | "completed" | "paused" | "failed" | "not-configured" | "fixture";
+  currentTask: string;
+  trace: HarnessTraceEvent[];
+  mcpCalls: number;
+  sandboxExecutions: number;
+  subagents: number;
+  dashboardUrl?: string;
+  statusCommentUrl?: string;
+}
+
 export interface DashboardRun extends ReproRun {
   generatedAt: string;
   source: "webhook" | "demo";
@@ -42,8 +80,11 @@ export interface DashboardRun extends ReproRun {
     files: string[];
     hash: string;
     verifiedAt: string;
+    body?: string;
   };
   pullRequest?: { number: number; url: string };
+  proof?: { before?: string; after?: string; regressions?: string; attempts?: string };
+  harness: HarnessState;
   evidence: EvidenceItem[];
   approvals: ApprovalAction[];
   security: SecurityScanResult;
@@ -56,6 +97,8 @@ interface WebhookRunRecord {
   repository: string;
   issueTitle: string;
   issueBody: string;
+  dashboardUrl?: string;
+  githubStatusComment?: { id?: number; url: string };
   run: ReproRun;
   scan: SecurityScanResult;
   trueForge?: {
@@ -64,6 +107,9 @@ interface WebhookRunRecord {
     error?: string;
     session?: { id?: string; title?: string | null };
     turn?: { id?: string; status?: string };
+    model?: string;
+    provider?: string;
+    events?: HarnessTraceEvent[];
     result?: {
       status?: string;
       summary?: string;
@@ -97,7 +143,11 @@ export async function fetchDashboardRun(fetchImpl: typeof fetch = fetch): Promis
     return toDashboardRun((await response.json()) as DemoRunSummary);
   }
 
-  const liveResponse = await fetchImpl(apiUrl("/api/runs/latest"), { cache: "no-store" });
+  const runId = typeof window !== "undefined" && window.location.pathname.startsWith("/runs/")
+    ? window.location.pathname.slice("/runs/".length)
+    : undefined;
+  const endpoint = runId ? `/api/runs/${encodeURIComponent(decodeURIComponent(runId))}` : "/api/runs/latest";
+  const liveResponse = await fetchImpl(apiUrl(endpoint), { cache: "no-store" });
   if (!liveResponse.ok) {
     if (liveResponse.status === 404) {
       throw new Error("No persisted GitHub webhook run is available yet");
@@ -128,6 +178,15 @@ export function toDashboardRun(summary: DemoRunSummary): DashboardRun {
     model: summary.model,
     currentBranch: summary.currentBranch,
     candidatePatch: summary.candidatePatch,
+    proof: {
+      before: `${matchedAttempts}/${totalAttempts} reproduction attempts matched the failure`,
+      after: afterPassed ? "Candidate patch passed the reproduction" : "Candidate patch did not pass the reproduction",
+      regressions: summary.validation.regressions
+        ? `Regression command exited ${summary.validation.regressions.exitCode ?? "without a result"}`
+        : "No regression command returned",
+      attempts: `${matchedAttempts}/${totalAttempts} attempts`
+    },
+    harness: buildDemoHarness(summary),
     evidence: [
       {
         id: "failure-fingerprint",
@@ -200,6 +259,7 @@ export function toDashboardRunFromWebhook(record: WebhookRunRecord): DashboardRu
     "No TrueForge metadata returned";
   const trueForgeBlocked = trueForgeStatus === "failed" || trueForgeStatus === "not-configured" || liveResult?.status === "failed";
   const issueBodySize = new Blob([record.issueBody]).size;
+  const trace = record.trueForge?.events ?? [];
 
   return {
     ...record.run,
@@ -210,7 +270,7 @@ export function toDashboardRunFromWebhook(record: WebhookRunRecord): DashboardRu
     issueTitle: record.issueTitle,
     assignee: trueForgeStatus === "started" || liveResult ? "TrueForge agent" : "Server intake",
     runtime: trueForgeStatus === "started" || liveResult ? "TrueForge Agent Harness" : "Webhook intake",
-    model: trueForgeStatus === "started" || liveResult ? "Configured by TrueForge" : "Not started",
+    model: record.trueForge?.model ?? (trueForgeStatus === "started" || liveResult ? "Configured by TrueForge" : "Not started"),
     currentBranch: livePatch?.branchName ?? `delivery ${record.deliveryId}`,
     ...(livePatch
       ? {
@@ -218,11 +278,27 @@ export function toDashboardRunFromWebhook(record: WebhookRunRecord): DashboardRu
             title: livePatch.title,
             files: livePatch.files.map((file) => file.path),
             hash: livePatch.hash,
-            verifiedAt: livePatch.verifiedAt
+            verifiedAt: livePatch.verifiedAt,
+            body: livePatch.body
           }
         }
       : {}),
     ...(pullRequest ? { pullRequest } : {}),
+    ...(liveResult?.proof ? { proof: liveResult.proof } : {}),
+    harness: {
+      model: record.trueForge?.model ?? (trueForgeStatus === "started" || liveResult ? "Configured model" : "Not started"),
+      provider: record.trueForge?.provider ?? (trueForgeStatus === "started" || liveResult ? "Configured provider" : "Not started"),
+      sessionId: record.trueForge?.session?.id,
+      turnId: record.trueForge?.turn?.id,
+      status: harnessStatusFor(record.run.status, trueForgeStatus, liveResult?.status),
+      currentTask: currentTaskFor(record.run.status, liveResult?.summary),
+      trace,
+      mcpCalls: trace.filter((event) => event.category === "mcp" && event.toolName).length,
+      sandboxExecutions: trace.filter((event) => event.category === "sandbox" && (event.command || event.sandboxId)).length,
+      subagents: trace.filter((event) => event.category === "subagent").length,
+      dashboardUrl: record.dashboardUrl,
+      statusCommentUrl: record.githubStatusComment?.url
+    },
     evidence: [
       {
         id: "security-scan",
@@ -337,6 +413,115 @@ export const statusLabels: Record<RunStatus, string> = {
   approved: "Approved",
   "pr-created": "PR created"
 };
+
+function harnessStatusFor(
+  runStatus: RunStatus,
+  trueForgeStatus: string,
+  resultStatus: string | undefined
+): HarnessState["status"] {
+  if (trueForgeStatus === "not-configured") return "not-configured";
+  if (trueForgeStatus === "failed" || resultStatus === "failed" || runStatus === "failed") return "failed";
+  if (runStatus === "awaiting-approval") return "paused";
+  if (trueForgeStatus === "completed" || runStatus === "pr-created") return "completed";
+  return "running";
+}
+
+function currentTaskFor(runStatus: RunStatus, summary?: string): string {
+  if (runStatus === "awaiting-approval") return "Waiting for maintainer approval before GitHub mutation";
+  if (runStatus === "pr-created") return "Pull request receipt recorded";
+  if (runStatus === "failed" || runStatus === "rejected") return summary ?? "Run stopped before repository mutation";
+  if (runStatus === "patch-ready" || runStatus === "validating") return "Validating the candidate patch against the reproduction";
+  if (runStatus === "reproducing" || runStatus === "verified") return "Reproducing the issue in the Daytona sandbox";
+  if (runStatus === "environment-building") return "Preparing the disposable execution environment";
+  return "Triaging the GitHub issue";
+}
+
+function buildDemoHarness(summary: DemoRunSummary): HarnessState {
+  const trace = demoTrace(summary);
+  return {
+    model: summary.model,
+    provider: summary.model.split(" ")[0] ?? "fixture",
+    status: "fixture",
+    currentTask: "Fixture proof complete; approval is simulated",
+    trace,
+    mcpCalls: trace.filter((event) => event.category === "mcp").length,
+    sandboxExecutions: trace.filter((event) => event.category === "sandbox" && event.command).length,
+    subagents: 0
+  };
+}
+
+function demoTrace(summary: DemoRunSummary): HarnessTraceEvent[] {
+  const at = (offset: number) => new Date(Date.parse(summary.generatedAt) + offset * 1_000).toISOString();
+  return [
+    {
+      id: "demo-issue",
+      at: at(0),
+      type: "mcp.read_issue",
+      category: "mcp",
+      source: "reprosmith",
+      status: "passed",
+      summary: "Fixture read of the GitHub issue",
+      toolName: "read_issue",
+      mcpServer: "reprosmith-github",
+      target: "issue #17"
+    },
+    {
+      id: "demo-file",
+      at: at(2),
+      type: "mcp.read_file",
+      category: "mcp",
+      source: "reprosmith",
+      status: "passed",
+      summary: "Fixture read of parser.mjs",
+      toolName: "read_file",
+      mcpServer: "reprosmith-github",
+      target: "parser.mjs"
+    },
+    {
+      id: "demo-sandbox",
+      at: at(4),
+      type: "sandbox.created",
+      category: "sandbox",
+      source: "reprosmith",
+      status: "passed",
+      summary: "Fixture sandbox created",
+      sandboxId: "demo-local-sandbox"
+    },
+    {
+      id: "demo-before",
+      at: at(6),
+      type: "sandbox.exec",
+      category: "sandbox",
+      source: "reprosmith",
+      status: "passed",
+      summary: "Fixture reproduction command completed",
+      command: "node repro.mjs",
+      exitCode: 1,
+      stderr: "TypeError: Cannot read properties of undefined"
+    },
+    {
+      id: "demo-after",
+      at: at(8),
+      type: "sandbox.exec",
+      category: "sandbox",
+      source: "reprosmith",
+      status: "passed",
+      summary: "Fixture regression command completed",
+      command: "node regression.mjs",
+      exitCode: 0,
+      stdout: "passed"
+    },
+    {
+      id: "demo-done",
+      at: at(10),
+      type: "turn.done",
+      category: "session",
+      source: "reprosmith",
+      status: "passed",
+      summary: "Fixture proof complete"
+    }
+  ];
+}
 
 function commandPassed(result: { exitCode: number | null; timedOut: boolean; outputLimitExceeded: boolean }): boolean {
   return result.exitCode === 0 && !result.timedOut && !result.outputLimitExceeded;

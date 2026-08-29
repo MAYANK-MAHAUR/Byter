@@ -23,6 +23,8 @@ export interface TrueForgeRuntimeEvent {
   raw: unknown;
 }
 
+export type TrueForgeRuntimeEventListener = (event: TrueForgeRuntimeEvent) => void | Promise<void>;
+
 export interface StartReproSmithSessionInput {
   issueUrl: string;
   issueTitle: string;

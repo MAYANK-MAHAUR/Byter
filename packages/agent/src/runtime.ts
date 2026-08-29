@@ -7,6 +7,7 @@ import type {
   TrueForgePartialSessionFailureDetails,
   TrueForgeRuntimeConfig,
   TrueForgeRuntimeEvent,
+  TrueForgeRuntimeEventListener,
   TrueForgeSession,
   TrueForgeTurn
 } from "./types.js";
@@ -69,7 +70,11 @@ export class ReproSmithTrueForgeRuntime {
     return data.map(normalizeEvent);
   }
 
-  async subscribeToTurn(sessionId: string, turnId: string): Promise<TrueForgeRuntimeEvent[]> {
+  async subscribeToTurn(
+    sessionId: string,
+    turnId: string,
+    onEvent?: TrueForgeRuntimeEventListener
+  ): Promise<TrueForgeRuntimeEvent[]> {
     if (!this.client.sessions.subscribeToTurn) {
       throw new Error("TrueForge SDK does not expose turn subscription");
     }
@@ -77,7 +82,9 @@ export class ReproSmithTrueForgeRuntime {
     const stream = await this.client.sessions.subscribeToTurn(sessionId, turnId);
     const events: TrueForgeRuntimeEvent[] = [];
     for await (const event of stream) {
-      events.push(normalizeEvent(event));
+      const normalized = normalizeEvent(event);
+      events.push(normalized);
+      await onEvent?.(normalized);
     }
 
     return events;

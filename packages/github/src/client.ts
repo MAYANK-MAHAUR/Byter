@@ -13,6 +13,11 @@ export interface GitHubIssue {
   state: string;
 }
 
+export interface GitHubIssueComment {
+  id: number;
+  html_url: string;
+}
+
 export interface GitHubContentFile {
   path: string;
   sha: string;
@@ -75,9 +80,20 @@ export class GitHubRestClient {
     repo: string,
     issueNumber: number,
     body: string
-  ): Promise<{ html_url: string }> {
-    return this.request<{ html_url: string }>(`${repoBasePath(owner, repo)}/issues/${validateIssueNumber(issueNumber)}/comments`, {
+  ): Promise<GitHubIssueComment> {
+    return this.request<GitHubIssueComment>(`${repoBasePath(owner, repo)}/issues/${validateIssueNumber(issueNumber)}/comments`, {
       method: "POST",
+      body: JSON.stringify({ body })
+    });
+  }
+
+  async updateIssueComment(owner: string, repo: string, commentId: number, body: string): Promise<GitHubIssueComment> {
+    if (!Number.isInteger(commentId) || commentId < 1) {
+      throw new Error("Invalid GitHub issue comment id");
+    }
+
+    return this.request<GitHubIssueComment>(`${repoBasePath(owner, repo)}/issues/comments/${commentId}`, {
+      method: "PATCH",
       body: JSON.stringify({ body })
     });
   }

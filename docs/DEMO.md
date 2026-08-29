@@ -50,7 +50,11 @@ Bash:
 PORT=3000 DATA_DIR=.data APPROVAL_TOKEN=replace-me GITHUB_WEBHOOK_SECRET=replace-me pnpm start
 ```
 
-Open `http://127.0.0.1:3000`.
+Open `http://127.0.0.1:3000`. The console has five evidence views: Overview,
+Harness trace, Reproduction, Patch, and Security. Live runs show a TrueForge
+session/turn, model provider, observed MCP calls, Daytona activity, bounded
+command output, and the approval checkpoint. Fixture mode is labeled in the
+header and is not production evidence.
 
 ## API Smoke Test
 
@@ -78,3 +82,13 @@ Before claiming a live production demo, verify:
 - `TRUEFORGE_URL` and `TRUEFORGE_API_KEY` point at the deployed TrueForge service.
 - The deployed TrueForge service sends AgentRouter's Cline-compatible `User-Agent` header.
 - `DAYTONA_API_KEY` is valid if using Daytona-backed sandboxes.
+
+For the current Railway deployment, the live test issue is
+`https://github.com/MAYANK-MAHAUR/Byter/issues/22`. Its permanent run route is
+`https://byter-production-1024.up.railway.app/runs/github-MAYANK-MAHAUR-Byter-22`.
+Before approval, confirm the dashboard says that no branch or pull request has
+been created. The status comment on the issue should contain the same run URL.
+
+Use the issue form in `.github/ISSUE_TEMPLATE/bug.yml` for a repeatable test.
+When `REPROSMITH_REQUIRE_TRIGGER_LABEL=true`, only an issue with the configured
+`reprosmith:run` label or the `/reprosmith run` marker starts a live run.

@@ -1,5 +1,9 @@
 # ReproSmith Release Audit
 
+> Historical note: this document describes the pre-live-integration audit. The
+> current implementation status is documented in `docs/HARNESS_VISIBILITY_AUDIT.md`
+> and `docs/ARCHITECTURE.md`.
+
 Audit date: 2026-08-28
 Branch audited: `chore/release-readiness-audit`
 Base remote observed: `https://github.com/MAYANK-MAHAUR/Byter.git`

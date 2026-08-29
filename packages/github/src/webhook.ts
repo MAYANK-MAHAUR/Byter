@@ -14,6 +14,7 @@ export interface GitHubIssuePayload {
     body: string | null;
     html_url: string;
     user?: { login: string };
+    labels?: Array<string | { name?: string }>;
   };
   repository: {
     name: string;

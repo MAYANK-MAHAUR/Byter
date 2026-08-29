@@ -1,26 +1,34 @@
 import {
+  Activity,
   AlertTriangle,
   ArrowUpRight,
+  Bot,
   Check,
+  ChevronDown,
   CircleDot,
   ClipboardCheck,
+  Cloud,
   FileCode2,
+  GitBranch,
+  GitCommitHorizontal,
   GitPullRequestArrow,
+  Layers3,
+  Link2,
   Lock,
+  MessageSquareText,
   RadioTower,
   RefreshCw,
+  Server,
   ShieldAlert,
   ShieldCheck,
+  Terminal,
   Timer,
+  User,
   X
 } from "lucide-react";
-import { useEffect, useMemo, useState, type ComponentType } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { RunEvent, RunStatus } from "@reprosmith/core";
-import {
-  readApprovalSubmission,
-  submitApprovalAction,
-  type ApprovalSubmission
-} from "./approval-client";
+import { readApprovalSubmission, submitApprovalAction, type ApprovalSubmission } from "./approval-client";
 import {
   fetchDashboardRun,
   happyPathStatuses,
@@ -28,24 +36,23 @@ import {
   type ApprovalAction,
   type ApprovalActionId,
   type DashboardRun,
-  type EvidenceItem
+  type HarnessState,
+  type HarnessTraceEvent
 } from "./data";
 
-const evidenceIcons: Record<EvidenceItem["kind"], ComponentType<{ size?: number }>> = {
-  stdout: RadioTower,
-  stack: AlertTriangle,
-  patch: FileCode2,
-  policy: ShieldAlert
-};
+type ViewId = "overview" | "trace" | "reproduction" | "patch" | "security";
 
-const actionIcons: Record<ApprovalAction["impact"], ComponentType<{ size?: number }>> = {
-  safe: GitPullRequestArrow,
-  review: ClipboardCheck,
-  blocked: X
-};
+const views: Array<{ id: ViewId; label: string; icon: typeof Activity }> = [
+  { id: "overview", label: "Overview", icon: Activity },
+  { id: "trace", label: "Harness trace", icon: Terminal },
+  { id: "reproduction", label: "Reproduction", icon: RadioTower },
+  { id: "patch", label: "Patch", icon: FileCode2 },
+  { id: "security", label: "Security", icon: ShieldCheck }
+];
 
 function App() {
   const [run, setRun] = useState<DashboardRun | undefined>();
+  const [activeView, setActiveView] = useState<ViewId>("overview");
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [loadError, setLoadError] = useState<string | undefined>();
@@ -53,31 +60,20 @@ function App() {
   const [approval, setApproval] = useState<ApprovalSubmission | undefined>();
   const [approvalError, setApprovalError] = useState<string | undefined>();
   const displayedStatus: RunStatus | undefined = approval?.resultStatus ?? run?.status;
-  const displayedEvents = useMemo(
-    () => (run && displayedStatus ? appendApprovalEvent(run.events, displayedStatus, approval) : []),
-    [approval, displayedStatus, run]
-  );
 
   useEffect(() => {
     void loadRun();
   }, []);
 
   useEffect(() => {
-    if (run?.source !== "webhook") {
-      return undefined;
-    }
-
-    const refreshTimer = window.setInterval(() => {
-      void loadRun();
-    }, 5_000);
-
+    if (run?.source !== "webhook") return undefined;
+    const refreshTimer = window.setInterval(() => void loadRun(), 5_000);
     return () => window.clearInterval(refreshTimer);
   }, [run?.source]);
 
   async function loadRun() {
     setIsRefreshing(true);
     setLoadError(undefined);
-
     try {
       const nextRun = await fetchDashboardRun();
       setRun(nextRun);
@@ -92,25 +88,13 @@ function App() {
   }
 
   async function handleApproval(actionId: ApprovalActionId) {
-    if (!run) {
-      return;
-    }
-
+    if (!run?.candidatePatch) return;
     setPendingAction(actionId);
     setApprovalError(undefined);
-
     try {
-      if (!run.candidatePatch) {
-        setApprovalError("No patch approval is available for this run yet");
-        return;
-      }
-
-      const result = await submitApprovalAction({
-        runId: run.id,
-        actionId,
-        patchHash: run.candidatePatch.hash
-      });
+      const result = await submitApprovalAction({ runId: run.id, actionId, patchHash: run.candidatePatch.hash });
       setApproval(result);
+      await loadRun();
     } catch (error) {
       setApprovalError(error instanceof Error ? error.message : "Approval save failed");
     } finally {
@@ -119,280 +103,196 @@ function App() {
   }
 
   if (isLoading) {
-    return (
-      <main className="shell center-shell">
-        <section className="load-state" aria-live="polite">
-          <RefreshCw size={22} aria-hidden="true" />
-          <h1>Loading ReproSmith run</h1>
-          <p>Connecting to the ReproSmith API.</p>
-        </section>
-      </main>
-    );
+    return <StatusScreen icon={<RefreshCw size={22} />} title="Loading ReproSmith run" detail="Connecting to the run record." />;
   }
 
   if (loadError || !run || !displayedStatus) {
     return (
-      <main className="shell center-shell">
-        <section className="load-state error" role="alert">
-          <ShieldAlert size={24} aria-hidden="true" />
-          <h1>ReproSmith API unavailable</h1>
-          <p>{loadError ?? "No run payload was returned."}</p>
-          <button type="button" className="refresh-button" disabled={isRefreshing} onClick={() => void loadRun()}>
+      <StatusScreen
+        icon={<ShieldAlert size={24} />}
+        title="Run record unavailable"
+        detail={loadError ?? "No persisted run payload was returned."}
+        error
+        action={
+          <button type="button" className="button button-primary" disabled={isRefreshing} onClick={() => void loadRun()}>
             <RefreshCw size={16} aria-hidden="true" />
-            {isRefreshing ? "Refreshing..." : "Refresh run"}
+            {isRefreshing ? "Refreshing" : "Refresh run"}
           </button>
-        </section>
-      </main>
+        }
+      />
     );
   }
 
-  const progressLabel = progressLabelFor(displayedStatus);
-  const latestQuarantine = run.quarantinedReports[0];
-  const candidatePatch = run.candidatePatch;
+  const currentStatus = displayedStatus;
   const pullRequest = approval?.pullRequest ?? run.pullRequest;
 
   return (
     <main className="shell">
       <header className="topbar" aria-label="Run summary">
         <div className="brand-lockup">
-          <div className="brand-mark" aria-hidden="true">
-            <span />
-            <span />
-            <span />
-          </div>
+          <div className="brand-mark" aria-hidden="true"><span /><span /><span /></div>
           <div>
-            <p className="eyebrow">ReproSmith console</p>
+            <p className="eyebrow">ReproSmith / live run console</p>
             <h1>{run.issueTitle}</h1>
+            <p className="header-subtitle">{run.repoLabel} <span>/</span> issue #{run.issue.issueNumber}</p>
           </div>
         </div>
-        <a className="issue-link" href={run.issue.url}>
-          Issue #{run.issue.issueNumber}
-          <ArrowUpRight size={16} aria-hidden="true" />
-        </a>
-        <button type="button" className="refresh-button" disabled={isRefreshing} onClick={() => void loadRun()}>
-          <RefreshCw size={16} aria-hidden="true" />
-          {isRefreshing ? "Refreshing..." : "Refresh run"}
-        </button>
+        <div className="header-actions">
+          <span className={`status-pill status-${statusTone(currentStatus)}`}><CircleDot size={12} />{statusLabels[currentStatus]}</span>
+          <a className="icon-button" href={run.issue.url} target="_blank" rel="noreferrer" aria-label="Open GitHub issue" title="Open GitHub issue">
+            <ArrowUpRight size={17} />
+          </a>
+          <button type="button" className="icon-button" disabled={isRefreshing} onClick={() => void loadRun()} aria-label="Refresh run" title="Refresh run">
+            <RefreshCw size={17} className={isRefreshing ? "spin" : undefined} />
+          </button>
+        </div>
       </header>
 
-      <section className="proof-strip" aria-label="Run proof tape">
-        <div>
-          <span>{run.sourceLabel}</span>
-          <span>base {run.issue.baseSha ?? "default HEAD"}</span>
-          <span>{run.currentBranch}</span>
-          {candidatePatch ? <span>{candidatePatch.hash}</span> : undefined}
-          <span>generated {formatTime(run.generatedAt)}</span>
+      <section className="run-ribbon" aria-label="Run identity">
+        <div className="ribbon-copy"><span className="live-indicator" />{run.sourceLabel}<span className="ribbon-divider" />{run.currentBranch}</div>
+        <div className="ribbon-links">
+          {run.harness.dashboardUrl ? <a href={run.harness.dashboardUrl}><Link2 size={14} />Permanent run URL</a> : undefined}
+          {run.harness.statusCommentUrl ? <a href={run.harness.statusCommentUrl} target="_blank" rel="noreferrer"><MessageSquareText size={14} />GitHub status</a> : undefined}
+          <strong>{progressLabelFor(currentStatus)}</strong>
         </div>
-        <strong>{progressLabel}</strong>
       </section>
 
-      <div className="workspace">
-        <aside className="timeline" aria-label="Run timeline">
-          <div className="panel-head">
-            <p className="eyebrow">Timeline</p>
-            <span className="status-pill active">{statusLabels[displayedStatus]}</span>
-          </div>
-          <ol>
-            {displayedEvents.map((event, index) => (
-              <li key={event.id} className={index === displayedEvents.length - 1 ? "current" : ""}>
-                <span className="timeline-dot">
-                  {index === displayedEvents.length - 1 ? <CircleDot size={14} /> : <Check size={14} />}
-                </span>
-                <div>
-                  <time dateTime={event.at}>{formatTime(event.at)}</time>
-                  <h2>{statusLabels[event.status]}</h2>
-                  <p>{event.message}</p>
-                </div>
-              </li>
-            ))}
-          </ol>
-        </aside>
+      <HarnessPanel harness={run.harness} run={run} />
 
-        <section className="evidence" aria-label="Evidence and approval">
-          <div className="run-meta">
-            <div>
-              <p className="eyebrow">Repository</p>
-              <h2>{run.repoLabel}</h2>
-            </div>
-            <dl>
-              <div>
-                <dt>Runtime</dt>
-                <dd>{run.runtime}</dd>
-              </div>
-              <div>
-                <dt>Model</dt>
-                <dd>{run.model}</dd>
-              </div>
-              <div>
-                <dt>Owner</dt>
-                <dd>{run.assignee}</dd>
-              </div>
-            </dl>
-          </div>
+      <nav className="view-tabs" aria-label="Run evidence views">
+        {views.map(({ id, label, icon: Icon }) => (
+          <button key={id} type="button" className={activeView === id ? "active" : undefined} onClick={() => setActiveView(id)} aria-current={activeView === id ? "page" : undefined}>
+            <Icon size={16} />{label}
+            {id === "trace" ? <span className="tab-count">{run.harness.trace.length}</span> : undefined}
+          </button>
+        ))}
+      </nav>
 
-          <div className="evidence-grid">
-            {run.evidence.map((item) => {
-              const Icon = evidenceIcons[item.kind];
-              return (
-                <article key={item.id} className={`metric ${item.status}`}>
-                  <div className="metric-icon">
-                    <Icon size={18} aria-hidden="true" />
-                  </div>
-                  <div>
-                    <p>{item.title}</p>
-                    <strong>{item.value}</strong>
-                    <span>{item.detail}</span>
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-
-          {candidatePatch ? (
-            <section className="approval-panel" aria-label="Approval controls">
-              <div className="panel-head">
-                <div>
-                  <p className="eyebrow">Approval</p>
-                  <h2>{candidatePatch.title}</h2>
-                </div>
-                <span className="hash-chip">
-                  <Lock size={14} aria-hidden="true" />
-                  {candidatePatch.hash}
-                </span>
-              </div>
-
-              <ul className="file-list" aria-label="Patch files">
-                {candidatePatch.files.map((file) => (
-                  <li key={file}>
-                    <FileCode2 size={15} aria-hidden="true" />
-                    {file}
-                  </li>
-                ))}
-              </ul>
-
-              <div className={`approval-state ${approvalError ? "error" : approval ? "saved" : "idle"}`} role="status">
-                {approvalError ?? approval?.message ?? (pullRequest ? `Draft PR #${pullRequest.number} created` : "Awaiting maintainer decision")}
-              </div>
-
-              {pullRequest ? (
-                <a className="pr-link" href={pullRequest.url} target="_blank" rel="noreferrer">
-                  <GitPullRequestArrow size={18} aria-hidden="true" />
-                  Open draft PR #{pullRequest.number}
-                  <ArrowUpRight size={16} aria-hidden="true" />
-                </a>
-              ) : displayedStatus === "awaiting-approval" ? (
-                <div className="approval-actions">
-                  {run.approvals.map((action) => {
-                    const Icon = actionIcons[action.impact];
-                    const isPending = pendingAction === action.id;
-                    return (
-                      <button
-                        key={action.id}
-                        type="button"
-                        className={`action-button ${action.impact}`}
-                        disabled={pendingAction !== undefined}
-                        aria-busy={isPending}
-                        onClick={() => void handleApproval(action.id)}
-                      >
-                        <Icon size={18} aria-hidden="true" />
-                        <span>{isPending ? "Saving..." : action.label}</span>
-                        <small>{action.description}</small>
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : undefined}
-            </section>
-          ) : (
-            <section className="approval-panel waiting-panel" aria-label="Run orchestration">
-              <div className="panel-head">
-                <div>
-                  <p className="eyebrow">Orchestration</p>
-                  <h2>{statusLabels[displayedStatus]}</h2>
-                </div>
-                <span className="hash-chip">
-                  <RadioTower size={14} aria-hidden="true" />
-                  {run.source}
-                </span>
-              </div>
-              <div className="approval-state idle" role="status">
-                {run.events.at(-1)?.message ?? "Run is waiting for proof"}
-              </div>
-            </section>
-          )}
-        </section>
-
-        <aside className="quarantine" aria-label="Security quarantine">
-          <div className="panel-head">
-            <div>
-              <p className="eyebrow">Quarantine</p>
-              <h2>Security review</h2>
-            </div>
-            <ShieldCheck size={20} aria-hidden="true" />
-          </div>
-          <div className="quarantine-state">
-            <ShieldAlert size={24} aria-hidden="true" />
-            <strong>{run.quarantinedReports.length} held</strong>
-            <span>Latest: issue #{latestQuarantine?.issueNumber ?? "-"}</span>
-          </div>
-          {run.quarantinedReports.map((report) =>
-            report.security.findings.map((finding) => (
-              <article className="finding" key={`${report.id}:${finding.ruleId}`}>
-                <div>
-                  <span className={`severity ${finding.severity}`}>{finding.severity}</span>
-                  <h3>{report.title}</h3>
-                </div>
-                <p>{finding.reason}</p>
-                <code>{finding.matchedText}</code>
-              </article>
-            ))
-          )}
-          <div className="last-seen">
-            <Timer size={16} aria-hidden="true" />
-            Seen {formatTime(candidatePatch?.verifiedAt ?? run.updatedAt)}
-          </div>
-        </aside>
-      </div>
+      {activeView === "overview" ? (
+        <OverviewView run={run} currentStatus={currentStatus} pullRequest={pullRequest} approval={approval} approvalError={approvalError} pendingAction={pendingAction} onApproval={handleApproval} />
+      ) : activeView === "trace" ? (
+        <TraceView harness={run.harness} />
+      ) : activeView === "reproduction" ? (
+        <ReproductionView run={run} />
+      ) : activeView === "patch" ? (
+        <PatchView run={run} pullRequest={pullRequest} />
+      ) : (
+        <SecurityView run={run} />
+      )}
     </main>
   );
 }
 
-function formatTime(value: string): string {
-  return new Intl.DateTimeFormat("en", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false
-  }).format(new Date(value));
+function StatusScreen({ icon, title, detail, error, action }: { icon: ReactNode; title: string; detail: string; error?: boolean; action?: ReactNode }) {
+  return <main className="shell center-shell"><section className={`load-state ${error ? "error" : ""}`} role={error ? "alert" : undefined}>{icon}<h1>{title}</h1><p>{detail}</p>{action}</section></main>;
 }
+
+function HarnessPanel({ harness, run }: { harness: HarnessState; run: DashboardRun }) {
+  const statusLabel = harness.status === "fixture" ? "Fixture trace" : harness.status === "paused" ? "Paused for approval" : harness.status === "not-configured" ? "Not connected" : harness.status;
+  return (
+    <section className={`harness-panel harness-${harness.status}`} aria-label="TrueForge harness">
+      <div className="harness-heading">
+        <div className="harness-name"><div className="harness-orbit"><Bot size={20} /></div><div><p className="eyebrow">TrueForge</p><h2>Live harness</h2></div></div>
+        <div className="harness-state"><span className="state-dot" />{statusLabel}<span className="state-source">{run.source === "demo" ? "demo data" : "persisted run"}</span></div>
+      </div>
+      <div className="harness-grid">
+        <div className="session-summary">
+          <p className="eyebrow">Current task</p>
+          <h3>{harness.currentTask}</h3>
+          <div className="session-identifiers">
+            <span><Server size={14} />{harness.provider}</span>
+            <span><Bot size={14} />{harness.model}</span>
+            <span><Link2 size={14} />{harness.sessionId ? `session ${shortId(harness.sessionId)}` : "session pending"}</span>
+            {harness.turnId ? <span><Activity size={14} />turn {shortId(harness.turnId)}</span> : undefined}
+          </div>
+        </div>
+        <div className="harness-metrics" aria-label="Harness evidence counts">
+          <Metric label="MCP calls" value={harness.mcpCalls} icon={<Layers3 size={16} />} />
+          <Metric label="Sandbox" value={harness.sandboxExecutions} icon={<Cloud size={16} />} />
+          <Metric label="Subagents" value={harness.subagents} icon={<User size={16} />} />
+          <Metric label="Trace events" value={harness.trace.length} icon={<Activity size={16} />} />
+        </div>
+      </div>
+      <AgentRail harness={harness} run={run} />
+    </section>
+  );
+}
+
+function Metric({ label, value, icon }: { label: string; value: number; icon: ReactNode }) {
+  return <div className="harness-metric"><span>{icon}</span><strong>{value}</strong><small>{label}</small></div>;
+}
+
+function AgentRail({ harness, run }: { harness: HarnessState; run: DashboardRun }) {
+  const roles = [
+    { label: "Orchestrator", state: harness.status === "failed" ? "failed" : harness.status === "completed" || harness.status === "paused" || harness.status === "fixture" ? "complete" : "active" },
+    { label: "Triage agent", state: roleState(harness, "read_issue", run.status) },
+    { label: "Repository agent", state: roleState(harness, "read_file", run.status) },
+    { label: "Reproduction agent", state: harness.sandboxExecutions > 0 ? "complete" : run.status === "reproducing" ? "active" : "pending" },
+    { label: "Fix agent", state: run.candidatePatch ? "complete" : ["fixing", "validating"].includes(run.status) ? "active" : "pending" }
+  ];
+  return <div className="agent-rail"><div className="rail-label"><WorkflowIcon />Agent activity</div><div className="agent-list">{roles.map((role) => <div className="agent-item" key={role.label}><span className={`agent-mark ${role.state}`} /> <span>{role.label}</span><small>{role.state === "complete" ? "observed" : role.state === "active" ? "working" : role.state === "failed" ? "failed" : "not observed"}</small></div>)}</div></div>;
+}
+
+function WorkflowIcon() { return <Layers3 size={15} />; }
+
+function roleState(harness: HarnessState, toolName: string, status: RunStatus): string {
+  if (harness.trace.some((event) => event.toolName === toolName)) return "complete";
+  if (status === "triaging" && toolName === "read_issue") return "active";
+  if (status === "environment-building" && toolName === "read_file") return "active";
+  return "pending";
+}
+
+function OverviewView({ run, currentStatus, pullRequest, approval, approvalError, pendingAction, onApproval }: { run: DashboardRun; currentStatus: RunStatus; pullRequest?: { number: number; url: string }; approval?: ApprovalSubmission; approvalError?: string; pendingAction?: ApprovalActionId; onApproval: (actionId: ApprovalActionId) => Promise<void> }) {
+  const displayedEvents = appendApprovalEvent(run.events, currentStatus, approval);
+  return <div className="overview-grid"><Timeline events={displayedEvents} status={currentStatus} /><section className="panel why-panel"><PanelTitle eyebrow="Verified finding" title="Why this run matters" icon={<ClipboardCheck size={17} />} /><div className="finding-callout"><ShieldCheck size={20} /><div><strong>{run.proof?.before ?? "Proof summary is still being collected"}</strong><p>{run.proof?.after ?? "The harness will place before and after evidence here."}</p></div></div><div className="proof-points"><ProofPoint icon={<Terminal size={15} />} label="Regression check" value={run.proof?.regressions ?? "Not returned yet"} /><ProofPoint icon={<RadioTower size={15} />} label="Attempts" value={run.proof?.attempts ?? "Not returned yet"} /></div></section><ApprovalPanel run={run} currentStatus={currentStatus} pullRequest={pullRequest} approval={approval} approvalError={approvalError} pendingAction={pendingAction} onApproval={onApproval} /></div>;
+}
+
+function Timeline({ events, status }: { events: RunEvent[]; status: RunStatus }) {
+  return <section className="panel timeline-panel"><PanelTitle eyebrow="Run timeline" title="Investigation stages" icon={<Activity size={17} />} /><ol className="timeline-list">{events.map((event, index) => <li key={event.id} className={index === events.length - 1 ? "current" : ""}><span className="timeline-dot">{index === events.length - 1 ? <CircleDot size={13} /> : <Check size={13} />}</span><div><time dateTime={event.at}>{formatTime(event.at)}</time><h3>{statusLabels[event.status]}</h3><p>{event.message}</p></div></li>)}</ol><div className="timeline-current"><span className={`status-dot status-${statusTone(status)}`} />Current: {statusLabels[status]}</div></section>;
+}
+
+function ApprovalPanel({ run, currentStatus, pullRequest, approval, approvalError, pendingAction, onApproval }: { run: DashboardRun; currentStatus: RunStatus; pullRequest?: { number: number; url: string }; approval?: ApprovalSubmission; approvalError?: string; pendingAction?: ApprovalActionId; onApproval: (actionId: ApprovalActionId) => Promise<void> }) {
+  const patch = run.candidatePatch;
+  return <section className="panel approval-panel"><PanelTitle eyebrow="Mutation gate" title={pullRequest ? "Draft pull request" : patch ? patch.title : "Awaiting proof"} icon={<Lock size={17} />} />{patch ? <><div className="approval-meta"><span><Lock size={13} />hash {patch.hash}</span><span><FileCode2 size={13} />{patch.files.length} files</span></div><ul className="file-list">{patch.files.map((file) => <li key={file}><FileCode2 size={14} />{file}</li>)}</ul>{currentStatus === "awaiting-approval" && !pullRequest ? <div className="preapproval-state"><ShieldCheck size={17} /><div><strong>Paused before GitHub mutation</strong><span>No branch or pull request has been created.</span></div></div> : undefined}<div className={`approval-state ${approvalError ? "error" : approval ? "saved" : ""}`} role="status">{approvalError ?? approval?.message ?? (pullRequest ? `Draft PR #${pullRequest.number} recorded` : "Maintainer decision required")}</div>{pullRequest ? <a className="button button-success" href={pullRequest.url} target="_blank" rel="noreferrer"><GitPullRequestArrow size={17} />Open draft PR #{pullRequest.number}<ArrowUpRight size={15} /></a> : currentStatus === "awaiting-approval" ? <div className="approval-actions">{run.approvals.map((action) => <ApprovalActionButton key={action.id} action={action} pending={pendingAction === action.id} disabled={pendingAction !== undefined} onClick={onApproval} />)}</div> : undefined}</> : <div className="empty-state"><RadioTower size={20} /><p>{run.events.at(-1)?.message ?? "Run is waiting for a candidate proof."}</p></div>}</section>;
+}
+
+function ApprovalActionButton({ action, pending, disabled, onClick }: { action: ApprovalAction; pending: boolean; disabled: boolean; onClick: (id: ApprovalActionId) => Promise<void> }) {
+  const Icon = action.impact === "safe" ? GitPullRequestArrow : action.impact === "review" ? ClipboardCheck : X;
+  return <button type="button" className={`action-button ${action.impact}`} disabled={disabled} onClick={() => void onClick(action.id)} aria-busy={pending}><Icon size={17} /><span>{pending ? "Saving" : action.label}</span><small>{action.description}</small></button>;
+}
+
+function TraceView({ harness }: { harness: HarnessState }) {
+  return <section className="panel trace-panel"><PanelTitle eyebrow="Executable evidence" title="Harness trace" icon={<Terminal size={17} />} /><div className="trace-intro"><span>{harness.trace.length ? `${harness.trace.length} persisted events` : "No rich events persisted"}</span><span>{harness.status === "fixture" ? "fixture trace" : harness.status === "paused" ? "checkpoint active" : "updates every 5 seconds"}</span></div>{harness.trace.length ? <ol className="trace-list">{harness.trace.map((event) => <TraceRow key={event.id} event={event} />)}</ol> : <div className="empty-state trace-empty"><Terminal size={22} /><div><strong>Trace details are not available for this run</strong><p>This historical record predates rich event persistence. New runs show tool calls, sandbox commands, and bounded output here.</p></div></div>}</section>;
+}
+
+function TraceRow({ event }: { event: HarnessTraceEvent }) {
+  const hasOutput = Boolean(event.command || event.stdout || event.stderr);
+  return <li className={`trace-row trace-${event.category}`}><div className="trace-icon">{traceIcon(event.category)}</div><div className="trace-main"><div className="trace-topline"><span className="trace-category">{event.category}</span><time dateTime={event.at}>{formatTime(event.at)}</time>{event.sequenceNumber !== undefined ? <span className="trace-sequence">#{event.sequenceNumber}</span> : undefined}</div><strong>{event.summary}</strong><div className="trace-details">{event.toolName ? <span>{event.toolName}</span> : undefined}{event.target ? <span>{event.target}</span> : undefined}{event.sandboxId ? <span>{shortId(event.sandboxId)}</span> : undefined}{event.exitCode !== undefined ? <span className={event.exitCode === 0 ? "text-success" : "text-danger"}>exit {event.exitCode ?? "?"}</span> : undefined}</div>{hasOutput ? <details className="trace-output"><summary><ChevronDown size={14} />Inspect bounded output</summary>{event.command ? <code>$ {event.command}</code> : undefined}{event.stdout ? <pre>{event.stdout}</pre> : undefined}{event.stderr ? <pre className="stderr">{event.stderr}</pre> : undefined}</details> : undefined}</div></li>;
+}
+
+function ReproductionView({ run }: { run: DashboardRun }) {
+  return <section className="panel evidence-view"><PanelTitle eyebrow="Proof" title="Reproduction" icon={<RadioTower size={17} />} /><div className="proof-grid"><ProofBlock label="Before patch" value={run.proof?.before ?? "No before-run evidence returned."} tone="failure" /><ProofBlock label="After patch" value={run.proof?.after ?? "No after-run evidence returned."} tone="success" /><ProofBlock label="Regression suite" value={run.proof?.regressions ?? "No regression evidence returned."} tone="neutral" /></div><div className="evidence-note"><AlertTriangle size={16} /><span>Only bounded command output is shown. Private model reasoning is intentionally omitted.</span></div></section>;
+}
+
+function PatchView({ run, pullRequest }: { run: DashboardRun; pullRequest?: { number: number; url: string } }) {
+  const patch = run.candidatePatch;
+  return <section className="panel evidence-view"><PanelTitle eyebrow="Candidate change" title={patch?.title ?? "No candidate patch"} icon={<FileCode2 size={17} />} />{patch ? <><div className="patch-meta"><span><GitBranch size={15} />{run.currentBranch}</span><span><Lock size={15} />{patch.hash}</span><span><Timer size={15} />verified {formatTime(patch.verifiedAt)}</span></div><ul className="file-list patch-files">{patch.files.map((file) => <li key={file}><FileCode2 size={14} />{file}</li>)}</ul>{patch.body ? <pre className="patch-body">{patch.body}</pre> : undefined}{pullRequest ? <a className="button button-success" href={pullRequest.url} target="_blank" rel="noreferrer"><GitPullRequestArrow size={17} />Open draft PR #{pullRequest.number}<ArrowUpRight size={15} /></a> : <div className="preapproval-state"><GitCommitHorizontal size={17} /><div><strong>Write is still gated</strong><span>The candidate patch remains a proposal until approval.</span></div></div>}</> : <div className="empty-state"><FileCode2 size={22} /><p>No candidate patch has been returned by the harness.</p></div>}</section>;
+}
+
+function SecurityView({ run }: { run: DashboardRun }) {
+  const safe = run.security.safeToExecute;
+  return <section className="panel evidence-view"><PanelTitle eyebrow="Input policy" title="Security review" icon={safe ? <ShieldCheck size={17} /> : <ShieldAlert size={17} />} /><div className={`security-banner ${safe ? "safe" : "blocked"}`}>{safe ? <ShieldCheck size={22} /> : <ShieldAlert size={22} />}<div><strong>{safe ? "Issue cleared for execution" : "Issue held before execution"}</strong><span>{run.security.findings.length} finding{run.security.findings.length === 1 ? "" : "s"} detected</span></div></div>{run.security.findings.length ? <div className="security-findings">{run.security.findings.map((finding) => <article className="security-finding" key={finding.ruleId}><span className={`severity ${finding.severity}`}>{finding.severity}</span><div><h3>{finding.ruleId}</h3><p>{finding.reason}</p><code>{finding.matchedText}</code></div></article>)}</div> : <div className="empty-state"><ShieldCheck size={20} /><p>No prompt-injection or credential-exfiltration findings were recorded.</p></div>}</section>;
+}
+
+function PanelTitle({ eyebrow, title, icon }: { eyebrow: string; title: string; icon: ReactNode }) { return <div className="panel-title"><div><p className="eyebrow">{eyebrow}</p><h2>{title}</h2></div><span className="panel-icon">{icon}</span></div>; }
+function ProofPoint({ icon, label, value }: { icon: ReactNode; label: string; value: string }) { return <div className="proof-point"><span>{icon}</span><div><small>{label}</small><strong>{value}</strong></div></div>; }
+function ProofBlock({ label, value, tone }: { label: string; value: string; tone: string }) { return <article className={`proof-block ${tone}`}><p className="eyebrow">{label}</p><strong>{value}</strong></article>; }
+
+function traceIcon(category: HarnessTraceEvent["category"]) { if (category === "mcp") return <Layers3 size={16} />; if (category === "sandbox") return <Cloud size={16} />; if (category === "subagent") return <User size={16} />; if (category === "github") return <GitPullRequestArrow size={16} />; if (category === "approval") return <Lock size={16} />; if (category === "session") return <Activity size={16} />; return <Bot size={16} />; }
+function statusTone(status: RunStatus): string { if (["failed", "rejected", "fix-failed", "environment-failed"].includes(status)) return "danger"; if (["awaiting-approval", "needs-info", "not-reproduced", "flaky"].includes(status)) return "warning"; if (["pr-created", "approved", "verified", "patch-ready"].includes(status)) return "success"; return "active"; }
+function formatTime(value: string): string { return new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value)); }
+function shortId(value: string): string { return value.length > 22 ? `${value.slice(0, 10)}...${value.slice(-8)}` : value; }
+function progressLabelFor(status: RunStatus): string { const index = happyPathStatuses.indexOf(status); return index === -1 ? "terminal state" : `stage ${index + 1}/${happyPathStatuses.length}`; }
+function appendApprovalEvent(events: RunEvent[], status: RunStatus, approval?: ApprovalSubmission): RunEvent[] { return approval ? [...events, { id: approval.id, runId: approval.runId, at: approval.savedAt, status, message: approval.message }] : events; }
 
 export default App;
-
-function appendApprovalEvent(
-  events: RunEvent[],
-  displayedStatus: RunStatus,
-  approval: ApprovalSubmission | undefined
-): RunEvent[] {
-  if (!approval) {
-    return events;
-  }
-
-  return [
-    ...events,
-    {
-      id: approval.id,
-      runId: approval.runId,
-      at: approval.savedAt,
-      status: displayedStatus,
-      message: approval.message
-    }
-  ];
-}
-
-function progressLabelFor(status: RunStatus): string {
-  const stageIndex = happyPathStatuses.indexOf(status);
-  if (stageIndex === -1) {
-    return "terminal branch";
-  }
-
-  return `stage ${stageIndex + 1}/${happyPathStatuses.length}`;
-}

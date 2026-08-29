@@ -178,7 +178,7 @@ describe("ReproSmith production server", () => {
       expect(body.run.status).toBe("environment-building");
       expect(body.trueForge.status).toBe("started");
       expect(body.trueForge.session.id).toBe("session-live-1");
-      expect(trueForgeRuntime.subscribeToTurn).toHaveBeenCalledWith("session-live-1", "turn-live-1");
+      expect(trueForgeRuntime.subscribeToTurn).toHaveBeenCalledWith("session-live-1", "turn-live-1", expect.any(Function));
 
       let latest: any;
       for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -189,10 +189,14 @@ describe("ReproSmith production server", () => {
         await new Promise((resolve) => setTimeout(resolve, 5));
       }
       expect(latest.trueForge.status).toBe("completed");
-      expect(latest.trueForge.events).toEqual([
-        { sequenceNumber: 1, type: "turn.started" },
-        { sequenceNumber: 2, type: "turn.done" }
-      ]);
+      expect(latest.trueForge.events).toHaveLength(2);
+      expect(latest.trueForge.events.map((event: { type: string }) => event.type)).toEqual(["turn.started", "turn.done"]);
+      expect(latest.trueForge.events[0]).toMatchObject({
+        sequenceNumber: 1,
+        type: "turn.started",
+        category: "agent",
+        source: "trueforge"
+      });
       expect(JSON.stringify(latest)).not.toContain("do-not-persist");
       await expect(readFile(join(liveDataDir, "webhook-runs.jsonl"), "utf8")).resolves.toContain("session-live-1");
     } finally {
@@ -247,7 +251,11 @@ describe("ReproSmith production server", () => {
     const githubTools = { callTool: vi.fn().mockResolvedValue({
       content: [{ type: "text", text: JSON.stringify({ number: 42, url: "https://github.test/pull/42" }) }]
     }) };
-    const server = createReproSmithServer({ staticDir, dataDir: liveDataDir, trueForgeRuntime, githubTools });
+    const githubClient = {
+      createIssueComment: vi.fn().mockResolvedValue({ id: 700, html_url: "https://github.test/issues/21#issuecomment-700" }),
+      updateIssueComment: vi.fn().mockResolvedValue({ id: 700, html_url: "https://github.test/issues/21#issuecomment-700" })
+    } as any;
+    const server = createReproSmithServer({ staticDir, dataDir: liveDataDir, trueForgeRuntime, githubTools, githubClient });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address() as AddressInfo;
     const isolatedBaseUrl = `http://127.0.0.1:${address.port}`;
@@ -288,6 +296,15 @@ describe("ReproSmith production server", () => {
       }
       expect(latest.run.status).toBe("awaiting-approval");
       expect(latest.trueForge.result.candidatePatch.files[0].path).toBe("src/parser.ts");
+      expect(githubClient.createIssueComment).toHaveBeenCalledTimes(1);
+      expect(githubClient.updateIssueComment).toHaveBeenCalledWith(
+        "o",
+        "r",
+        700,
+        expect.stringContaining(`/runs/${encodeURIComponent(latest.run.id)}`)
+      );
+      const runRecord = await fetch(`${isolatedBaseUrl}/api/runs/${encodeURIComponent(latest.run.id)}`).then((runResponse) => runResponse.json());
+      expect(runRecord.run.id).toBe(latest.run.id);
 
       const approval = await fetch(`${isolatedBaseUrl}/api/approvals`, {
         method: "POST",
@@ -321,6 +338,8 @@ describe("ReproSmith production server", () => {
       const finalRun = await fetch(`${isolatedBaseUrl}/api/runs/latest`).then((latestResponse) => latestResponse.json());
       expect(finalRun.run.status).toBe("pr-created");
       expect(finalRun.trueForge.result.pullRequest).toEqual({ number: 42, url: "https://github.test/pull/42" });
+      expect(githubClient.updateIssueComment).toHaveBeenCalledTimes(2);
+      expect(githubClient.updateIssueComment.mock.calls.at(-1)?.[3]).toContain("Draft PR created");
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     }
