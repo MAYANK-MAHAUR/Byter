@@ -16,6 +16,10 @@ export function tokenizePattern(pattern: string): Token[] {
 
     if (char === "\\") {
       const escaped = pattern[index + 1];
+      if (escaped === undefined) {
+        tokens.push({ type: "literal", value: "\\" });
+        continue;
+      }
       tokens.push({ type: "literal", value: escaped.toLowerCase() });
       index += 1;
       continue;
