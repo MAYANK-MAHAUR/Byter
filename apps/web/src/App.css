@@ -242,7 +242,7 @@ h3 { margin-bottom: 0; font-size: 0.96rem; font-weight: 720; line-height: 1.34; 
   .brand-lockup { gap: 11px; }
   .status-pill { display: none; }
   .run-ribbon { align-items: flex-start; flex-direction: column; gap: 9px; padding: 11px 12px; }
-  .ribbon-links { width: 100%; justify-content: space-between; }
+  .ribbon-links { width: 100%; flex-wrap: wrap; justify-content: space-between; }
   .ribbon-divider { display: none; }
   .harness-panel { padding: 15px; }
   .harness-heading { align-items: flex-start; flex-direction: column; gap: 10px; }

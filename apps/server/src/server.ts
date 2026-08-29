@@ -430,6 +430,12 @@ async function refreshLegacyHarnessTrace(
       ...value,
       trueForge: {
         ...value.trueForge,
+        ...(typeof value.trueForge.model === "string"
+          ? {}
+          : { model: process.env.MODEL_NAME ?? "configured model" }),
+        ...(typeof value.trueForge.provider === "string"
+          ? {}
+          : { provider: process.env.MODEL_PROVIDER ?? "configured provider" }),
         events: mergeHarnessEvents([], projected)
       }
     } as PersistedWebhookRunRecord;
