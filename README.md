@@ -1,155 +1,88 @@
 # Byter
 
-**CI for bug reports.** Byter turns a GitHub issue into executable evidence, a tested candidate patch, and a human-controlled draft pull request.
+**CI for bug reports.** Byter turns a GitHub issue into executable proof, a tested candidate fix, and a human-controlled draft pull request.
 
-[Open the live app](https://byter-production-1024.up.railway.app/) · [Inspect a verified run](https://byter-production-1024.up.railway.app/runs/github-MAYANK-MAHAUR-Byter-32-8fd16ca98fd2) · [See the source issue](https://github.com/MAYANK-MAHAUR/Byter/issues/32)
+[Live app](https://byter-production-1024.up.railway.app/) · [Verified run](https://byter-production-1024.up.railway.app/runs/github-MAYANK-MAHAUR-Byter-32-8fd16ca98fd2) · [Source issue](https://github.com/MAYANK-MAHAUR/Byter/issues/32) · [Build story](docs/BLOG.md)
 
-![Byter live run overview](docs/images/byter-live-overview.png)
+![Byter showing a live TrueForge investigation](docs/images/byter-live-overview.png)
 
-## The Problem
+## Why Byter
 
-Bug reports are descriptions, not proof. A maintainer still has to find the relevant code, reproduce the failure, rule out regressions, and decide whether an automated change is safe to write.
+Large repositories receive more bug reports than maintainers can manually reproduce. Byter gives each report the same evidence-first path:
 
-Byter makes that investigation repeatable:
+1. Scan the issue as untrusted input.
+2. Read scoped repository context through GitHub MCP.
+3. Reproduce the failure repeatedly in a disposable Daytona sandbox.
+4. Generate a minimal patch and run before, after, and regression checks.
+5. Pause before any branch, commit, or pull request is created.
+6. Continue only when a maintainer approves on the dashboard or replies `approve` on GitHub.
 
-1. A labeled GitHub issue starts a signed webhook run.
-2. The issue is scanned as untrusted input.
-3. TrueForge reads only the required repository context through GitHub MCP.
-4. Code runs inside a disposable Daytona sandbox.
-5. The same target failure must reproduce three times.
-6. A candidate patch is checked against the reproducer and regression suite.
-7. Byter pauses before any branch, commit, or pull request is created.
-8. A maintainer reviews the exact change and replies `approve` on GitHub or approves in the dashboard.
+## TrueForge In The Loop
 
-The result is evidence before trust, and approval before mutation.
+TrueForge is the durable harness behind every live run. It starts the model turn, connects the GitHub MCP tools, provisions sandbox execution, records observable events, and returns the structured proof contract that drives Byter's UI.
 
-## See the Harness Work
+The public [issue #32 run](https://byter-production-1024.up.railway.app/runs/github-MAYANK-MAHAUR-Byter-32-8fd16ca98fd2) is real: 57 persisted events, 11 repository-tool events, 22 sandbox events, a 3/3 reproduction, a passing candidate patch, and regression proof. It is intentionally paused at `awaiting-approval`.
 
-![TrueForge MCP and sandbox trace](docs/images/byter-harness-trace.png)
+| Observable harness trace | Review before repository writes |
+| --- | --- |
+| ![GitHub MCP and Daytona activity](docs/images/byter-harness-trace.png) | ![Candidate patch and approval gate](docs/images/byter-review-gate.png) |
 
-The live trace shows repository calls, files inspected, bounded sandbox commands, and stdout or stderr. It presents agent findings and tool evidence without exposing private chain-of-thought or sensitive infrastructure details.
+Byter shows what the agent did, what evidence it produced, and what it is waiting for. It does not expose private chain-of-thought, credentials, internal provider IDs, or raw infrastructure paths.
 
-![Byter candidate patch and approval gate](docs/images/byter-review-gate.png)
+## Safety Boundary
 
-The review page keeps reproduction proof, the proposed diff, regression results, and the irreversible action in one place. Until approval, no branch or pull request exists.
-
-## Why TrueForge
-
-TrueForge is the durable agent harness at the center of Byter. It starts a model turn, exposes the narrow GitHub MCP toolset, provisions the Daytona execution environment, records every observable tool event, and returns a structured proof contract. Byter persists that contract so a maintainer can reconnect through a permanent run URL.
-
-```text
-GitHub issue
-    |
-    v
-Byter intake ---- security scan ---- append-only progress comments
-    |
-    v
-TrueForge ---- AgentRouter model
-    |              |
-    |              +---- GitHub MCP repository reads
-    +---- Daytona sandbox commands
-    |
-    v
-reproduction + patch + regression proof
-    |
-    v
-maintainer approval ---- GitHub MCP write ---- draft pull request
-```
-
-This is a real integration, not a dashboard simulation. The public [verified run](https://byter-production-1024.up.railway.app/runs/github-MAYANK-MAHAUR-Byter-32-8fd16ca98fd2) contains 57 persisted harness events, 11 repository-tool events, 22 sandbox events, a three-run reproduction, a passing patched reproduction, and regression checks. It is deliberately paused at the approval boundary.
-
-## Safety And Control
-
-- Issue text is untrusted and scanned for prompt injection, credential requests, and destructive commands.
-- The model receives scoped repository tools instead of unrestricted GitHub credentials.
-- Sandbox output, paths, secrets, provider identifiers, and internal session details are redacted before public display.
-- Reproduction and command output are bounded by time and size limits.
-- Protected reproducer files and symlink escapes are rejected during patch validation.
-- A verified label requires complete executable proof.
-- Repository writes require explicit maintainer approval and produce a draft pull request.
-- Progress is append-only on the issue, so each stage remains visible rather than rewriting history.
+- Signed webhook intake and prompt-injection scanning.
+- Scoped GitHub tools and bounded sandbox output.
+- Secret, path, and provider-detail redaction before public persistence.
+- Repeated failure proof plus after-patch and regression validation.
+- Maintainer approval before the first GitHub write; approved changes open as a draft PR.
 
 ## Qodo Code Review Evidence
 
-Qodo was part of the engineering loop, not a final badge. We opened focused pull requests, let Qodo review them, fixed valid findings, and requested follow-up reviews. Its feedback helped us improve correctness, reliability, performance, and security across the webhook, persistence, public API, and approval paths.
+Qodo reviewed the project through focused pull requests while it was being built. We fixed valid findings and requested follow-up reviews instead of treating review as a final badge.
 
-Representative evidence:
+- [PR #14](https://github.com/MAYANK-MAHAUR/Byter/pull/14): merged TrueForge webhook integration reviewed by Qodo.
+- [PR #23](https://github.com/MAYANK-MAHAUR/Byter/pull/23): merged harness UI and release-hardening work.
+- [Detailed Qodo review](https://github.com/MAYANK-MAHAUR/Byter/pull/23#issuecomment-5462238474) and [follow-up confirmation](https://github.com/MAYANK-MAHAUR/Byter/pull/23#issuecomment-5468354710).
 
-- [PR #14: start TrueForge sessions from webhooks](https://github.com/MAYANK-MAHAUR/Byter/pull/14) is a merged, substantive integration change reviewed by Qodo.
-- [PR #23: live TrueForge harness visibility](https://github.com/MAYANK-MAHAUR/Byter/pull/23) is the merged product surface and final hardening pass.
-- [Qodo's detailed review on PR #23](https://github.com/MAYANK-MAHAUR/Byter/pull/23#issuecomment-5462238474) records the concrete findings and follow-up discussion.
+Qodo found real correctness and security issues: repeat-trigger labels, secret and filesystem-path leakage, unsafe host-derived links, duplicate persistence, unstable run IDs, and oversized polling records. The fixes added public-data normalization, trusted base URLs, stable event identity, redaction, deduplicated writes, and regression tests. The follow-up review confirmed that no active findings remained.
 
-On PR #23, we addressed or made obsolete the reported issues around repeat-trigger labels, secret and filesystem-path leakage, non-unique run URLs and event IDs, unsafe host-derived links, missed label events, duplicate persistence, and oversized polling records. The resulting changes added stricter public-data normalization, credential and path redaction, trusted base URLs, stable identifiers, correct label handling, deduplicated writes, and targeted regression tests. Most actionable Qodo findings were fixed in code; findings that no longer applied were verified against the updated implementation rather than silently ignored.
-
-<details>
-<summary>Complete pull request and Qodo trail</summary>
-
-| PR | Change | Result | Qodo trail |
-| --- | --- | --- | --- |
-| [#1](https://github.com/MAYANK-MAHAUR/Byter/pull/1) | Foundation | Merged | Before Qodo |
-| [#2](https://github.com/MAYANK-MAHAUR/Byter/pull/2) | GitHub integration | Merged | Reviewed |
-| [#3](https://github.com/MAYANK-MAHAUR/Byter/pull/3) | TrueForge adapter | Merged | Reviewed |
-| [#4](https://github.com/MAYANK-MAHAUR/Byter/pull/4) | Reproduction engine | Merged | Reviewed |
-| [#5](https://github.com/MAYANK-MAHAUR/Byter/pull/5) | Patch validation | Merged | Reviewed |
-| [#6](https://github.com/MAYANK-MAHAUR/Byter/pull/6) | Dashboard console | Merged | Reviewed |
-| [#7](https://github.com/MAYANK-MAHAUR/Byter/pull/7) | Documentation iteration | Closed | Reviewed |
-| [#8](https://github.com/MAYANK-MAHAUR/Byter/pull/8) | End-to-end demo runner | Merged | Reviewed |
-| [#9](https://github.com/MAYANK-MAHAUR/Byter/pull/9) | Workspace verification CI | Merged | Reviewed |
-| [#10](https://github.com/MAYANK-MAHAUR/Byter/pull/10) | Reference-aware demo checks | Closed | Reviewed |
-| [#11](https://github.com/MAYANK-MAHAUR/Byter/pull/11) | README polish | Merged | Reviewed |
-| [#12](https://github.com/MAYANK-MAHAUR/Byter/pull/12) | Dashboard API integration | Merged | Reviewed |
-| [#13](https://github.com/MAYANK-MAHAUR/Byter/pull/13) | Release readiness audit | Merged | Reviewed |
-| [#14](https://github.com/MAYANK-MAHAUR/Byter/pull/14) | Webhook-to-TrueForge handoff | Merged | Reviewed and revised |
-| [#15](https://github.com/MAYANK-MAHAUR/Byter/pull/15) | Webhook hardening | Closed | Reviewed |
-| [#16](https://github.com/MAYANK-MAHAUR/Byter/pull/16) | Persisted dashboard runs | Merged | Qodo trial paused |
-| [#17](https://github.com/MAYANK-MAHAUR/Byter/pull/17) | Persist TrueForge events | Merged | Qodo trial paused |
-| [#18](https://github.com/MAYANK-MAHAUR/Byter/pull/18) | Live dashboard refresh | Merged | Qodo trial paused |
-| [#19](https://github.com/MAYANK-MAHAUR/Byter/pull/19) | Remote GitHub MCP | Merged | Qodo trial paused |
-| [#20](https://github.com/MAYANK-MAHAUR/Byter/pull/20) | Live API connection | Merged | Qodo trial paused |
-| [#21](https://github.com/MAYANK-MAHAUR/Byter/pull/21) | Generated parser fix | Closed | Qodo trial paused |
-| [#23](https://github.com/MAYANK-MAHAUR/Byter/pull/23) | Harness visibility and release hardening | Merged | Deep review, findings fixed |
-| [#26](https://github.com/MAYANK-MAHAUR/Byter/pull/26) | Approval-generated parser fix | Closed draft | Proof output, not a product change |
-
-</details>
-
-## Run It Locally
+## Run Locally
 
 Prerequisites: Node.js 22+ and pnpm 10+.
 
-```bash
+```powershell
 pnpm install
 pnpm verify
+pnpm build
 ```
 
-`pnpm verify` builds, lints, type-checks, tests, and runs the deterministic end-to-end proof fixture. To open the dashboard locally:
+Start the API in one terminal:
 
-```bash
-pnpm build
+```powershell
+$env:PORT="8787"
+$env:DATA_DIR=".data-local"
 pnpm --filter @byter/server start
+```
+
+Start the dashboard in another terminal:
+
+```powershell
+$env:BYTER_API_TARGET="http://127.0.0.1:8787"
+$env:VITE_BYTER_DATA_MODE="demo"
 pnpm dev
 ```
 
-Copy `.env.example` to `.env.local` when configuring external services. Never commit local credentials. The main production integrations are TrueForge, AgentRouter, Daytona, GitHub webhooks, GitHub MCP, PostgreSQL, and Redis. AgentRouter requests require `User-Agent: Cline`.
+Open `http://127.0.0.1:5173`. Demo mode is explicit and local; production runs use the integrations listed in [`.env.example`](.env.example).
 
-## Repository Map
+## Project Map
 
 ```text
-apps/demo-runner       deterministic end-to-end proof fixture
-apps/github-mcp        scoped GitHub read and approved-write tools
-apps/server            webhooks, run persistence, API, and approvals
-apps/web               live harness, evidence, patch, and security UI
-demo/buggy-parser      intentionally seeded test repository
-packages/agent         TrueForge adapter and structured proof contract
-packages/core          state machine, shared types, and security scanner
-packages/github        webhook verification and GitHub client
-packages/repro-engine  reproduction, minimization, and patch validation
+apps/server          webhooks, persistence, approvals, and public API
+apps/web             live harness and evidence dashboard
+apps/github-mcp      scoped repository tools and approved writes
+packages/agent       TrueForge runtime and structured proof contract
+packages/repro-engine reproduction and patch validation
 ```
 
-## Submission Links
-
-- [Live application](https://byter-production-1024.up.railway.app/)
-- [Reconnectable verified run](https://byter-production-1024.up.railway.app/runs/github-MAYANK-MAHAUR-Byter-32-8fd16ca98fd2)
-- [Current public repository](https://github.com/MAYANK-MAHAUR/Byter)
-- [TrueForge Agent Harness Hackathon](https://www.wemakedevs.org/hackathons/trueforge)
-
-Built for the TrueForge Agent Harness Hackathon.
+Built for the [TrueForge Agent Harness Hackathon](https://www.wemakedevs.org/hackathons/trueforge).
