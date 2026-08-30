@@ -478,6 +478,8 @@ button:focus-visible, a:focus-visible, summary:focus-visible {
 .markdown-content table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
 .markdown-content th, .markdown-content td { padding: 7px 9px; border: 1px solid #b8c4d3; text-align: left; }
 .markdown-content a { font-weight: 750; }
+.markdown-content .katex { font-size: 1em; }
+.markdown-content .katex-display { max-width: 100%; margin: 0.8em 0; padding: 0.25em 0; overflow-x: auto; overflow-y: hidden; }
 .finding-title { margin-bottom: 5px; font-weight: 780; }
 .finding-title, .finding-title p { font-size: 0.94rem; }
 .finding-callout .markdown-content + .markdown-content { color: #496175; font-size: 0.82rem; }

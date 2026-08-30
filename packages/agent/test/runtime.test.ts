@@ -66,6 +66,7 @@ describe("ReproSmith TrueForge runtime", () => {
     expect(buildReproSmithAgentSpec(config).instructions).toContain("submit_reprosmith_result");
     expect(buildReproSmithAgentSpec(config).instructions).toContain("never paste repository source or test contents into base64 blobs");
     expect(buildReproSmithAgentSpec(config).instructions).toContain("concise GitHub-flavored Markdown");
+    expect(buildReproSmithAgentSpec(config).instructions).toContain("opening and closing $$ delimiters on their own lines");
     expect(buildReproSmithAgentSpec(config).instructions).toContain("Do not use raw HTML");
     expect(buildReproSmithAgentSpec(config).instructions).toContain("immediately run that exact command two more times");
     expect(message).toContain("public-safe GitHub-flavored Markdown");

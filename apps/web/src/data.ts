@@ -455,7 +455,7 @@ function compactSummary(value?: string): string | undefined {
   const compact = value?.replace(/\s+/g, " ").trim();
   if (!compact) return undefined;
   const sentence = compact.match(/^.{1,360}?(?:[.!?](?:\s|$)|$)/)?.[0] ?? compact;
-  return sentence.length <= 380 ? sentence : `${sentence.slice(0, 377).trimEnd()}...`;
+  return truncateAtBoundary(sentence, 380);
 }
 
 export const happyPathStatuses: RunStatus[] = [
@@ -530,7 +530,23 @@ function compactProof(proof: { before?: string; after?: string; regressions?: st
 
 function compactEvidence(value: string, maxLength: number): string {
   const compact = value.replace(/\s+/g, " ").trim();
-  return compact.length <= maxLength ? compact : `${compact.slice(0, maxLength - 1).trimEnd()}...`;
+  return truncateAtBoundary(compact, maxLength);
+}
+
+export function truncateAtBoundary(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+
+  let prefix = value.slice(0, Math.max(0, maxLength - 3));
+  const minimumBoundary = Math.floor(prefix.length * 0.6);
+  const boundary = Math.max(
+    prefix.lastIndexOf(" "),
+    prefix.lastIndexOf("\n"),
+    prefix.lastIndexOf("."),
+    prefix.lastIndexOf(","),
+    prefix.lastIndexOf(";")
+  );
+  if (boundary >= minimumBoundary) prefix = prefix.slice(0, boundary + (prefix[boundary] === "." ? 1 : 0));
+  return `${prefix.trimEnd()}...`;
 }
 
 function boundedMarkdown(value: string, maxLength: number): string {

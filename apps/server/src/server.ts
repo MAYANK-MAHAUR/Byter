@@ -1281,11 +1281,10 @@ export function buildGitHubStatusComment(record: PersistedWebhookRunRecord, kind
     lines.push(
       "",
       "### Evidence",
-      "| Check | Result |",
-      "| --- | --- |",
-      `| Reproduction | ${commentProofText(result.proof?.attempts, "3/3 matching failures", 160)} |`,
-      `| Before / after | ${commentProofText(result.proof?.before, "Failure observed", 170)} → ${commentProofText(result.proof?.after, "Passes after patch", 170)} |`,
-      `| Regression suite | ${commentProofText(result.proof?.regressions, "Passed", 180)} |`,
+      `- **Reproduction:** ${commentProofText(result.proof?.attempts, "3/3 matching failures", 180)}`,
+      `- **Before:** ${commentProofText(result.proof?.before, "Failure observed", 260)}`,
+      `- **After:** ${commentProofText(result.proof?.after, "Passes after patch", 260)}`,
+      `- **Regression suite:** ${commentProofText(result.proof?.regressions, "Passed", 260)}`,
       "",
       "### Root cause",
       safeCommentMarkdown(result.rootCauseSummary ?? summarizeCommentText(result.summary), 360),
@@ -1308,11 +1307,10 @@ export function buildGitHubStatusComment(record: PersistedWebhookRunRecord, kind
     lines.push(
       "",
       "### Evidence",
-      "| Check | Result |",
-      "| --- | --- |",
-      `| Reproduction | ${commentProofText(result.proof?.attempts, "3/3 matching failures", 160)} |`,
-      `| Before / after | ${commentProofText(result.proof?.before, "Failure observed", 170)} → ${commentProofText(result.proof?.after, "Passes after patch", 170)} |`,
-      `| Regression suite | ${commentProofText(result.proof?.regressions, "Passed", 180)} |`,
+      `- **Reproduction:** ${commentProofText(result.proof?.attempts, "3/3 matching failures", 180)}`,
+      `- **Before:** ${commentProofText(result.proof?.before, "Failure observed", 260)}`,
+      `- **After:** ${commentProofText(result.proof?.after, "Passes after patch", 260)}`,
+      `- **Regression suite:** ${commentProofText(result.proof?.regressions, "Passed", 260)}`,
       "",
       "### Finding",
       safeCommentMarkdown(result.rootCauseSummary ?? summarizeCommentText(result.summary), 360),
@@ -1345,7 +1343,7 @@ export function buildGitHubStatusComment(record: PersistedWebhookRunRecord, kind
 }
 
 function safeCommentText(value: string, maxBytes: number): string {
-  return clampText(redactHarnessText(value), maxBytes);
+  return clampCommentText(redactHarnessText(value), maxBytes);
 }
 
 function safeCommentMarkdown(value: string, maxBytes: number): string {
@@ -1356,7 +1354,30 @@ function safeCommentMarkdown(value: string, maxBytes: number): string {
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
-  return clampText(redactedLines, maxBytes);
+  return clampCommentText(redactedLines, maxBytes);
+}
+
+function clampCommentText(value: string, maxBytes: number): string {
+  if (Buffer.byteLength(value, "utf8") <= maxBytes) return value;
+
+  const suffix = "...";
+  const byteLimit = Math.max(0, maxBytes - Buffer.byteLength(suffix, "utf8"));
+  let prefix = "";
+  for (const character of value) {
+    if (Buffer.byteLength(prefix + character, "utf8") > byteLimit) break;
+    prefix += character;
+  }
+
+  const minimumBoundary = Math.floor(prefix.length * 0.6);
+  const boundary = Math.max(
+    prefix.lastIndexOf(" "),
+    prefix.lastIndexOf("\n"),
+    prefix.lastIndexOf("."),
+    prefix.lastIndexOf(","),
+    prefix.lastIndexOf(";")
+  );
+  if (boundary >= minimumBoundary) prefix = prefix.slice(0, boundary + (prefix[boundary] === "." ? 1 : 0));
+  return `${prefix.trimEnd()}${suffix}`;
 }
 
 function commentProofText(value: string | undefined, fallback: string, maxBytes: number): string {

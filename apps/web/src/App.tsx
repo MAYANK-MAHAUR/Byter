@@ -33,6 +33,7 @@ import { MarkdownContent } from "./MarkdownContent";
 import {
   fetchDashboardRun,
   statusLabels,
+  truncateAtBoundary,
   type ApprovalAction,
   type ApprovalActionId,
   type DashboardRun,
@@ -366,8 +367,8 @@ function ProofBlock({ label, value, tone }: { label: string; value: string; tone
 function traceIcon(category: HarnessTraceEvent["category"]) { if (category === "mcp") return <Layers3 size={16} />; if (category === "sandbox") return <Cloud size={16} />; if (category === "subagent") return <User size={16} />; if (category === "github") return <GitPullRequestArrow size={16} />; if (category === "approval") return <Lock size={16} />; if (category === "session") return <Activity size={16} />; return <Bot size={16} />; }
 function statusTone(status: RunStatus): string { if (["failed", "rejected", "fix-failed", "environment-failed"].includes(status)) return "danger"; if (["awaiting-approval", "needs-info", "not-reproduced", "flaky"].includes(status)) return "warning"; if (["pr-created", "approved", "verified", "patch-ready"].includes(status)) return "success"; return "active"; }
 function formatTime(value: string): string { return new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value)); }
-function compactSummary(value?: string): string | undefined { const compact = value?.replace(/\s+/g, " ").trim(); if (!compact) return undefined; const sentence = compact.match(/^.{1,360}?(?:[.!?](?:\s|$)|$)/)?.[0] ?? compact; return sentence.length <= 380 ? sentence : `${sentence.slice(0, 377).trimEnd()}...`; }
-function briefSummary(value?: string, maxLength = 130): string | undefined { const compact = value?.replace(/\s+/g, " ").trim(); if (!compact) return undefined; return compact.length <= maxLength ? compact : `${compact.slice(0, maxLength - 3).trimEnd()}...`; }
+function compactSummary(value?: string): string | undefined { const compact = value?.replace(/\s+/g, " ").trim(); if (!compact) return undefined; const sentence = compact.match(/^.{1,360}?(?:[.!?](?:\s|$)|$)/)?.[0] ?? compact; return truncateAtBoundary(sentence, 380); }
+function briefSummary(value?: string, maxLength = 130): string | undefined { const compact = value?.replace(/\s+/g, " ").trim(); return compact ? truncateAtBoundary(compact, maxLength) : undefined; }
 function unifiedDiff(before: string, after: string): string { const oldLines = before.split("\n"); const newLines = after.split("\n"); const output = [`--- base`, `+++ proposed`]; const max = Math.max(oldLines.length, newLines.length); for (let index = 0; index < max; index += 1) { const oldLine = oldLines[index]; const newLine = newLines[index]; if (oldLine === newLine && oldLine !== undefined) output.push(`  ${oldLine}`); else { if (oldLine !== undefined) output.push(`- ${oldLine}`); if (newLine !== undefined) output.push(`+ ${newLine}`); } } return output.join("\n"); }
 function appendApprovalEvent(events: RunEvent[], status: RunStatus, approval?: ApprovalSubmission): RunEvent[] { return approval ? [...events, { id: approval.id, runId: approval.runId, at: approval.savedAt, status, message: approval.message }] : events; }
 

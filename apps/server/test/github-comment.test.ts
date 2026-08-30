@@ -80,4 +80,26 @@ describe("GitHub status comment rendering", () => {
     expect(body).not.toContain(patch.hash);
     expect(body).not.toContain("Base branch");
   });
+
+  it("keeps long evidence readable without cutting the final word", () => {
+    const body = buildGitHubStatusComment(record("awaiting-approval", {
+      status: "patch-ready",
+      summary: "The failure was reproduced.",
+      rootCauseSummary: "The escape branch changes the literal case.",
+      proposedFixSummary: "Preserve the escaped character.",
+      proof: {
+        before: `The reproducer returned the incorrect lowercase token because ${"additional context ".repeat(30)}`,
+        after: "The same reproducer returned the expected uppercase token.",
+        regressions: "The focused and existing suites passed.",
+        attempts: "3/3 matching failures"
+      },
+      candidatePatch: patch
+    }), "completed");
+
+    expect(body).toContain("- **Before:**");
+    expect(body).toContain("- **After:**");
+    expect(body).not.toContain("| Before / after |");
+    expect(body).toMatch(/- \*\*Before:\*\* [^\n]+\.\.\./);
+    expect(body).not.toMatch(/con\.\.\./);
+  });
 });
