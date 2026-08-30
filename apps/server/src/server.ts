@@ -529,7 +529,7 @@ function publicRunPayload(value: unknown): unknown {
           Object.entries(publicEvent).map(([key, field]) => [
             key,
             typeof field === "string" && ["summary", "target", "command", "stdout", "stderr", "artifact", "subagent"].includes(key)
-              ? redactHarnessText(field)
+              ? safePublicMarkdown(field)
               : field
           ])
           ),
