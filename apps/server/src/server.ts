@@ -928,6 +928,7 @@ async function applyVerifiedLabel(
       await githubClient.createLabel(owner, repo, labelName, labelColor, "Issue verified by reproducible evidence");
       await githubClient.addLabels(owner, repo, issueNumber, [labelName]);
     }
+    await githubClient.updateLabel?.(owner, repo, labelName, labelColor, "Issue verified by reproducible evidence");
     return {
       ...record,
       verifiedLabel: { name: "reprosmith:verified", appliedAt: new Date().toISOString() }
@@ -971,6 +972,7 @@ async function applyAwaitingApprovalLabel(
       await githubClient.createLabel(owner, repo, labelName, labelColor, "Verified patch is waiting for maintainer approval");
       await githubClient.addLabels(owner, repo, issueNumber, [labelName]);
     }
+    await githubClient.updateLabel?.(owner, repo, labelName, labelColor, "Verified patch is waiting for maintainer approval");
     return {
       ...record,
       approvalLabel: { name: labelName, appliedAt: new Date().toISOString() }
