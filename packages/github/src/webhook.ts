@@ -8,6 +8,7 @@ export interface WebhookVerificationInput {
 
 export interface GitHubIssuePayload {
   action: string;
+  label?: { name?: string };
   issue: {
     number: number;
     title: string;

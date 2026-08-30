@@ -135,8 +135,13 @@ describe("ReproSmith production server", () => {
       labels: [{ name: "reprosmith:run" }]
     };
     const repository = { name: "r", full_name: "o/r", default_branch: "main", owner: { login: "o" } };
-    const sendWebhook = async (action: string, deliveryId: string) => {
-      const payload = JSON.stringify({ action, issue, repository });
+    const sendWebhook = async (action: string, deliveryId: string, labelName?: string) => {
+      const payload = JSON.stringify({
+        action,
+        ...(labelName ? { label: { name: labelName } } : {}),
+        issue,
+        repository
+      });
       return fetch(`${baseUrl}/api/github/webhook`, {
         method: "POST",
         headers: {
@@ -149,13 +154,17 @@ describe("ReproSmith production server", () => {
       });
     };
 
-    const labeledResponse = await sendWebhook("labeled", "delivery-label-18");
+    const labeledResponse = await sendWebhook("labeled", "delivery-label-18", "reprosmith:run");
     expect(labeledResponse.status).toBe(202);
     expect((await labeledResponse.json()).ignored).not.toBe(true);
 
     const editedResponse = await sendWebhook("edited", "delivery-edit-18");
     expect(editedResponse.status).toBe(202);
     expect(await editedResponse.json()).toMatchObject({ ignored: true });
+
+    const lifecycleLabelResponse = await sendWebhook("labeled", "delivery-lifecycle-label-18", "reprosmith:triaging");
+    expect(lifecycleLabelResponse.status).toBe(202);
+    expect(await lifecycleLabelResponse.json()).toMatchObject({ ignored: true });
   });
 
   it("starts a TrueForge session for safe signed GitHub issue webhooks", async () => {

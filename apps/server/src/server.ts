@@ -2332,6 +2332,9 @@ function triggerLabel(): string {
 }
 
 function hasTriggerLabel(webhook: ReturnType<typeof parseIssueWebhook>): boolean {
+  if (webhook.action === "labeled") {
+    return webhook.label?.name === triggerLabel();
+  }
   return (webhook.issue.labels ?? []).some((label) => (typeof label === "string" ? label : label.name) === triggerLabel());
 }
 
