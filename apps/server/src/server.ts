@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { appendFile, mkdir, open, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -298,16 +298,23 @@ async function handleGitHubWebhook(
     return;
   }
 
+  const isExplicitRetrigger = webhook.action === "reopened";
   const issueTriggerKey = triggerKeyFor(webhook);
-  if (activeIssueTriggers.has(issueTriggerKey)) {
-    sendJson(response, 202, { ignored: true, reason: "Duplicate issue trigger" });
-    return;
+  if (!isExplicitRetrigger) {
+    if (activeIssueTriggers.has(issueTriggerKey)) {
+      sendJson(response, 202, { ignored: true, reason: "Duplicate issue trigger" });
+      return;
+    }
+    activeIssueTriggers.add(issueTriggerKey);
   }
-  activeIssueTriggers.add(issueTriggerKey);
 
-  const claim = await acquireAtomicTriggerClaim(dataDir, issueTriggerKey);
+  const claim = isExplicitRetrigger
+    ? { acquired: true, release: async () => {} }
+    : await acquireAtomicTriggerClaim(dataDir, issueTriggerKey);
   if (!claim.acquired) {
-    activeIssueTriggers.delete(issueTriggerKey);
+    if (!isExplicitRetrigger) {
+      activeIssueTriggers.delete(issueTriggerKey);
+    }
     sendJson(response, 202, { ignored: true, reason: "Duplicate issue trigger" });
     return;
   }
@@ -363,7 +370,9 @@ async function handleGitHubWebhook(
 
     sendJson(response, 202, commentRecord);
   } finally {
-    activeIssueTriggers.delete(issueTriggerKey);
+    if (!isExplicitRetrigger) {
+      activeIssueTriggers.delete(issueTriggerKey);
+    }
     await claim.release();
   }
 }
@@ -1727,20 +1736,26 @@ async function acquireAtomicTriggerClaim(
   const safeName = createHash("sha256").update(key).digest("hex").slice(0, 24);
   const claimPath = join(claimsDir, `claim-${safeName}.lock`);
   const now = Date.now();
+  const token = randomUUID();
+
+  const makeConditionalRelease = (ownerToken: string) => async () => {
+    try {
+      const current = JSON.parse(await readFile(claimPath, "utf8"));
+      if (current?.token === ownerToken) {
+        await unlink(claimPath);
+      }
+    } catch {
+      // ignore
+    }
+  };
 
   try {
     const handle = await open(claimPath, "wx");
-    await handle.writeFile(JSON.stringify({ key, time: now }));
+    await handle.writeFile(JSON.stringify({ key, time: now, token }));
     await handle.close();
     return {
       acquired: true,
-      release: async () => {
-        try {
-          await unlink(claimPath);
-        } catch {
-          // ignore
-        }
-      }
+      release: makeConditionalRelease(token)
     };
   } catch (err: any) {
     if (err?.code === "EEXIST") {
@@ -1749,16 +1764,11 @@ async function acquireAtomicTriggerClaim(
         if (typeof content?.time === "number" && now - content.time < duplicateIssueTriggerWindowMs) {
           return { acquired: false, release: async () => {} };
         }
-        await writeFile(claimPath, JSON.stringify({ key, time: now }));
+        // Stale claim expired: overwrite with new ownership token
+        await writeFile(claimPath, JSON.stringify({ key, time: now, token }));
         return {
           acquired: true,
-          release: async () => {
-            try {
-              await unlink(claimPath);
-            } catch {
-              // ignore
-            }
-          }
+          release: makeConditionalRelease(token)
         };
       } catch {
         return { acquired: false, release: async () => {} };

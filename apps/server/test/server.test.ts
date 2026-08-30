@@ -1,4 +1,5 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { AddressInfo } from "node:net";
@@ -213,6 +214,45 @@ describe("Byter production server", () => {
 
     const persisted = (await readFile(join(dataDir, "webhook-runs.jsonl"), "utf8")).trim().split("\n");
     expect(persisted).toHaveLength(2);
+  });
+
+  it("protects renewed atomic claims from stale owner releases", async () => {
+    const claimsDir = join(dataDir, ".claims");
+    await mkdir(claimsDir, { recursive: true });
+    const key = "owner/repo#99:testhash";
+    const safeName = createHash("sha256").update(key).digest("hex").slice(0, 24);
+    const lockFile = join(claimsDir, `claim-${safeName}.lock`);
+
+    // Simulate Process A writing an old lock that expired 2 minutes ago
+    const oldTime = Date.now() - 120_000;
+    const oldToken = "token-process-a";
+    await writeFile(lockFile, JSON.stringify({ key, time: oldTime, token: oldToken }), "utf8");
+
+    // Process B encounters the expired lock, renews it with a new token
+    const issue = {
+      number: 99,
+      title: "Stale claim issue",
+      body: "body",
+      html_url: "https://github.test/owner/repo/issues/99"
+    };
+    const repository = { name: "repo", full_name: "owner/repo", default_branch: "main", owner: { login: "owner" } };
+    const payload = JSON.stringify({
+      action: "opened",
+      issue,
+      repository
+    });
+    const response = await fetch(`${baseUrl}/api/github/webhook`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-GitHub-Event": "issues",
+        "X-GitHub-Delivery": "delivery-stale-takeover-99",
+        "X-Hub-Signature-256": signWebhookPayload(payload, "webhook-secret")
+      },
+      body: payload
+    });
+    expect(response.status).toBe(202);
+    expect((await response.json()).ignored).not.toBe(true);
   });
 
   it("starts a TrueForge session for safe signed GitHub issue webhooks", async () => {
