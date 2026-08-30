@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { appendFile, mkdir, open, readFile, stat } from "node:fs/promises";
+import { appendFile, mkdir, open, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -305,6 +305,13 @@ async function handleGitHubWebhook(
   }
   activeIssueTriggers.add(issueTriggerKey);
 
+  const claim = await acquireAtomicTriggerClaim(dataDir, issueTriggerKey);
+  if (!claim.acquired) {
+    activeIssueTriggers.delete(issueTriggerKey);
+    sendJson(response, 202, { ignored: true, reason: "Duplicate issue trigger" });
+    return;
+  }
+
   try {
     if (await issueTriggerWasRecentlyProcessed(dataDir, webhook)) {
       sendJson(response, 202, { ignored: true, reason: "Duplicate issue trigger" });
@@ -357,6 +364,7 @@ async function handleGitHubWebhook(
     sendJson(response, 202, commentRecord);
   } finally {
     activeIssueTriggers.delete(issueTriggerKey);
+    await claim.release();
   }
 }
 
@@ -1703,13 +1711,71 @@ async function deliveryWasProcessed(dataDir: string, deliveryId: string): Promis
 }
 
 function triggerKeyFor(webhook: ReturnType<typeof parseIssueWebhook>): string {
-  return `${webhook.repository.full_name.toLowerCase()}#${webhook.issue.number}`;
+  const contentDigest = createHash("sha256")
+    .update(`${webhook.issue.title}\n${webhook.issue.body ?? ""}`)
+    .digest("hex")
+    .slice(0, 16);
+  return `${webhook.repository.full_name.toLowerCase()}#${webhook.issue.number}:${contentDigest}`;
+}
+
+async function acquireAtomicTriggerClaim(
+  dataDir: string,
+  key: string
+): Promise<{ acquired: boolean; release: () => Promise<void> }> {
+  const claimsDir = join(dataDir, ".claims");
+  await mkdir(claimsDir, { recursive: true });
+  const safeName = createHash("sha256").update(key).digest("hex").slice(0, 24);
+  const claimPath = join(claimsDir, `claim-${safeName}.lock`);
+  const now = Date.now();
+
+  try {
+    const handle = await open(claimPath, "wx");
+    await handle.writeFile(JSON.stringify({ key, time: now }));
+    await handle.close();
+    return {
+      acquired: true,
+      release: async () => {
+        try {
+          await unlink(claimPath);
+        } catch {
+          // ignore
+        }
+      }
+    };
+  } catch (err: any) {
+    if (err?.code === "EEXIST") {
+      try {
+        const content = JSON.parse(await readFile(claimPath, "utf8"));
+        if (typeof content?.time === "number" && now - content.time < duplicateIssueTriggerWindowMs) {
+          return { acquired: false, release: async () => {} };
+        }
+        await writeFile(claimPath, JSON.stringify({ key, time: now }));
+        return {
+          acquired: true,
+          release: async () => {
+            try {
+              await unlink(claimPath);
+            } catch {
+              // ignore
+            }
+          }
+        };
+      } catch {
+        return { acquired: false, release: async () => {} };
+      }
+    }
+    return { acquired: false, release: async () => {} };
+  }
 }
 
 async function issueTriggerWasRecentlyProcessed(
   dataDir: string,
   webhook: ReturnType<typeof parseIssueWebhook>
 ): Promise<boolean> {
+  if (webhook.action === "reopened") {
+    return false;
+  }
+
   const cutoff = Date.now() - duplicateIssueTriggerWindowMs;
   try {
     for await (const line of readJsonlLines(join(dataDir, "webhook-runs.jsonl"))) {
@@ -2593,7 +2659,7 @@ function hasExplicitTrigger(webhook: ReturnType<typeof parseIssueWebhook>): bool
   if (/(^|\n)\/byter\s+run(?:\s|$)/i.test(webhook.issue.body ?? "")) {
     return true;
   }
-  return (webhook.action === "opened" || webhook.action === "labeled") && hasTriggerLabel(webhook);
+  return (webhook.action === "opened" || webhook.action === "labeled" || webhook.action === "reopened") && hasTriggerLabel(webhook);
 }
 
 function resultStatusFor(actionId: ApprovalActionId) {

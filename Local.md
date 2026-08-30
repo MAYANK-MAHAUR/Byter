@@ -200,11 +200,11 @@ TrueForge runs in Standalone mode with an embedded SQLite database:
 
 - **Windows PowerShell:**
   ```powershell
-  npx @truefoundry/trueforge@latest
+  $env:STANDALONE="true"; npx @truefoundry/trueforge@latest
   ```
 - **Linux / macOS Bash:**
   ```bash
-  npx @truefoundry/trueforge@latest
+  STANDALONE=true npx @truefoundry/trueforge@latest
   ```
 - **Verification:** Open `http://localhost:3000` in your browser.
 
@@ -448,14 +448,17 @@ Deploying Byter to production on [Railway](https://railway.com/) uses **two inte
 
 ### Step 2: Deploy Service 1 (TrueForge Agent Harness)
 
-1. Inside your Railway project, click **+ Create** &rarr; **GitHub Repo** &rarr; select `MAYANK-MAHAUR/Byter` (or your repository fork).
-2. Click on the newly created service card &rarr; open the **Settings** tab:
+1. Inside your Railway project, click **+ Create** &rarr; **Docker Image**.
+2. Enter the official published TrueForge Docker image:
+   ```text
+   truefoundry/trueforge:latest
+   ```
+   *(Or `@truefoundry/trueforge:latest`)*
+3. Click on the created service card &rarr; open the **Settings** tab:
    - **Service Name**: `trueforge`
-   - **Root Directory**: `trueforge-repo`
-   - **Dockerfile Path**: `Dockerfile.dev` (or root `Dockerfile`)
-3. Go to the **Networking** tab &rarr; click **Generate Domain** (e.g., `https://trueforge-production-xxxx.up.railway.app`).
-4. Go to the **Volumes** tab &rarr; click **Add Volume**:
-   - **Mount Path**: `/data` (ensures SQLite database and sandbox catalogs persist across restarts).
+4. Go to the **Networking** tab &rarr; click **Generate Domain** (e.g., `https://trueforge-production-xxxx.up.railway.app`).
+5. Go to the **Volumes** tab &rarr; click **Add Volume**:
+   - **Mount Path**: `/data` (ensures SQLite database and session history persist across restarts).
 5. Go to the **Variables** tab and set the environment variables:
 
 | Variable | Value | Description |

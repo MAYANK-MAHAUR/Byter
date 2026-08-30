@@ -207,8 +207,12 @@ describe("Byter production server", () => {
       reason: "Duplicate issue trigger"
     });
 
+    const reopenedResponse = await sendWebhook("reopened", "delivery-reopened-19");
+    expect(reopenedResponse.status).toBe(202);
+    expect((await reopenedResponse.json()).ignored).not.toBe(true);
+
     const persisted = (await readFile(join(dataDir, "webhook-runs.jsonl"), "utf8")).trim().split("\n");
-    expect(persisted).toHaveLength(1);
+    expect(persisted).toHaveLength(2);
   });
 
   it("starts a TrueForge session for safe signed GitHub issue webhooks", async () => {
