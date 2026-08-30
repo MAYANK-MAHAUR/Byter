@@ -2,7 +2,7 @@
 
 **CI for bug reports.** Byter turns a GitHub issue into executable evidence, a tested candidate patch, and a human-controlled draft pull request.
 
-[Open the live app](https://byter-production-1024.up.railway.app/) · [Inspect a verified run](https://byter-production-1024.up.railway.app/runs/github-MAYANK-MAHAUR-Byter-25-b03846ab693f) · [See the source issue](https://github.com/MAYANK-MAHAUR/Byter/issues/25)
+[Open the live app](https://byter-production-1024.up.railway.app/) · [Inspect a verified run](https://byter-production-1024.up.railway.app/runs/github-MAYANK-MAHAUR-Byter-32-8fd16ca98fd2) · [See the source issue](https://github.com/MAYANK-MAHAUR/Byter/issues/32)
 
 ![Byter live run overview](docs/images/byter-live-overview.png)
 
@@ -56,7 +56,7 @@ reproduction + patch + regression proof
 maintainer approval ---- GitHub MCP write ---- draft pull request
 ```
 
-This is a real integration, not a dashboard simulation. The public [verified run](https://byter-production-1024.up.railway.app/runs/github-MAYANK-MAHAUR-Byter-25-b03846ab693f) contains 90 persisted harness events, 14 repository calls, 43 sandbox steps, a three-run reproduction, a passing patched reproduction, and a regression check. It is deliberately paused at the approval boundary.
+This is a real integration, not a dashboard simulation. The public [verified run](https://byter-production-1024.up.railway.app/runs/github-MAYANK-MAHAUR-Byter-32-8fd16ca98fd2) contains 57 persisted harness events, 11 repository-tool events, 22 sandbox events, a three-run reproduction, a passing patched reproduction, and regression checks. It is deliberately paused at the approval boundary.
 
 ## Safety And Control
 
@@ -148,7 +148,7 @@ packages/repro-engine  reproduction, minimization, and patch validation
 ## Submission Links
 
 - [Live application](https://byter-production-1024.up.railway.app/)
-- [Reconnectable verified run](https://byter-production-1024.up.railway.app/runs/github-MAYANK-MAHAUR-Byter-25-b03846ab693f)
+- [Reconnectable verified run](https://byter-production-1024.up.railway.app/runs/github-MAYANK-MAHAUR-Byter-32-8fd16ca98fd2)
 - [Current public repository](https://github.com/MAYANK-MAHAUR/Byter)
 - [TrueForge Agent Harness Hackathon](https://www.wemakedevs.org/hackathons/trueforge)
 
