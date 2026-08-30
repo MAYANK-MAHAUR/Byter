@@ -242,13 +242,15 @@ describe("ReproSmith production server", () => {
       expect(latest.run.status).toBe("failed");
       expect(latest.trueForge.error).toContain("valid reprosmith.result contract");
       expect(latest.trueForge.events).toHaveLength(2);
-      expect(latest.trueForge.events.map((event: { type: string }) => event.type)).toEqual(["turn.started", "turn.done"]);
+      expect(latest.trueForge.events.map((event: { type: string }) => event.type)).toEqual(["step.started", "step.done"]);
       expect(latest.trueForge.events[0]).toMatchObject({
-        sequenceNumber: 1,
-        type: "turn.started",
+        type: "step.started",
         category: "agent",
         source: "trueforge"
       });
+      expect(latest.trueForge.events[0].sequenceNumber).toBeUndefined();
+      expect(latest.trueForge.session).toBeUndefined();
+      expect(latest.trueForge.turn).toBeUndefined();
       expect(JSON.stringify(latest)).not.toContain("do-not-persist");
       expect(githubClient.createIssueComment).toHaveBeenCalledTimes(2);
       expect(githubClient.createIssueComment.mock.calls[1]?.[3]).toContain("No genuine proof contract was returned");
@@ -427,7 +429,7 @@ describe("ReproSmith production server", () => {
       kind: "reprosmith.result",
       status: "patch-ready",
       summary: "Reproduced 3/3 and passed the regression check.",
-      proof: { before: "3/3 failed", after: "3/3 passed", regressions: "passed", attempts: "3/3" },
+      proof: { before: "3/3 failed in /tmp/private/repro.ts with token=fixture-sensitive", after: "3/3 passed", regressions: "passed", attempts: "3/3" },
       candidatePatch: {
         title: "Fix parser crash",
         body: "Verified by ReproSmith.",
@@ -510,6 +512,9 @@ describe("ReproSmith production server", () => {
       }
       expect(latest.run.status).toBe("awaiting-approval");
       expect(latest.trueForge.result.candidatePatch.files[0].path).toBe("src/parser.ts");
+      expect(latest.trueForge.result.proof.before).toContain("[sandbox path]");
+      expect(JSON.stringify(latest)).not.toContain("/tmp/private/repro.ts");
+      expect(JSON.stringify(latest)).not.toContain("fixture-sensitive");
       expect(latest.githubComments).toHaveLength(1);
       expect(latest.verifiedLabel.name).toBe("reprosmith:verified");
       expect(githubClient.createIssueComment).toHaveBeenCalledTimes(1);
@@ -524,6 +529,8 @@ describe("ReproSmith production server", () => {
       expect(githubClient.addLabels).toHaveBeenCalledWith("o", "r", 21, ["reprosmith:awaiting-approval"]);
       const runRecord = await fetch(`${isolatedBaseUrl}/api/runs/${encodeURIComponent(latest.run.id)}`).then((runResponse) => runResponse.json());
       expect(runRecord.run.id).toBe(latest.run.id);
+      expect(runRecord.trueForge.session).toBeUndefined();
+      expect(runRecord.trueForge.turn).toBeUndefined();
 
       const approvalPayload = JSON.stringify({
         action: "created",

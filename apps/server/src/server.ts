@@ -460,7 +460,7 @@ async function handleLatestRun(
   }
 
   const refreshed = await refreshLegacyHarnessTrace(dataDir, latest, trueForgeRuntime);
-  sendJson(response, 200, hydratePersistedPullRequest(ensureDashboardUrl(refreshed)));
+  sendJson(response, 200, publicRunPayload(hydratePersistedPullRequest(ensureDashboardUrl(refreshed))));
 }
 
 async function handleRun(
@@ -482,7 +482,79 @@ async function handleRun(
   }
 
   const refreshed = await refreshLegacyHarnessTrace(dataDir, record, trueForgeRuntime);
-  sendJson(response, 200, hydratePersistedPullRequest(ensureDashboardUrl(refreshed)));
+  sendJson(response, 200, publicRunPayload(hydratePersistedPullRequest(ensureDashboardUrl(refreshed))));
+}
+
+function publicRunPayload(value: unknown): unknown {
+  if (!isRecord(value) || !isRecord(value.trueForge)) return value;
+
+  const publicRun = isRecord(value.run) && Array.isArray(value.run.events)
+    ? {
+        ...value.run,
+        events: value.run.events.map((event) => {
+          if (!isRecord(event)) return event;
+          const { evidence: _evidence, ...publicEvent } = event;
+          return {
+            ...publicEvent,
+            ...(typeof publicEvent.message === "string" ? { message: safePublicMarkdown(publicEvent.message) } : {})
+          };
+        })
+      }
+    : value.run;
+  const { session: _session, turn: _turn, ...trueForge } = value.trueForge;
+  const result = isRecord(trueForge.result)
+    ? {
+        ...trueForge.result,
+        ...(typeof trueForge.result.summary === "string" ? { summary: safePublicMarkdown(trueForge.result.summary) } : {}),
+        ...(typeof trueForge.result.rootCauseSummary === "string" ? { rootCauseSummary: safePublicMarkdown(trueForge.result.rootCauseSummary) } : {}),
+        ...(typeof trueForge.result.proposedFixSummary === "string" ? { proposedFixSummary: safePublicMarkdown(trueForge.result.proposedFixSummary) } : {}),
+        ...(isRecord(trueForge.result.proof)
+          ? {
+              proof: Object.fromEntries(
+                Object.entries(trueForge.result.proof).map(([key, field]) => [key, typeof field === "string" ? safePublicMarkdown(field) : field])
+              )
+            }
+          : {}),
+        ...(isRecord(trueForge.result.candidatePatch) && typeof trueForge.result.candidatePatch.body === "string"
+          ? { candidatePatch: { ...trueForge.result.candidatePatch, body: safePublicMarkdown(trueForge.result.candidatePatch.body) } }
+          : {})
+      }
+    : trueForge.result;
+  const events = Array.isArray(trueForge.events)
+    ? trueForge.events.map((event, index) => {
+        if (!isRecord(event)) return event;
+        const { sandboxId: _sandboxId, sequenceNumber: _sequenceNumber, mcpServer: _mcpServer, ...publicEvent } = event;
+        return {
+          ...Object.fromEntries(
+          Object.entries(publicEvent).map(([key, field]) => [
+            key,
+            typeof field === "string" && ["summary", "target", "command", "stdout", "stderr", "artifact", "subagent"].includes(key)
+              ? redactHarnessText(field)
+              : field
+          ])
+          ),
+          id: `event-${index + 1}`,
+          ...(publicEvent.category === "session" ? { category: "agent" } : {}),
+          ...(typeof publicEvent.type === "string"
+            ? { type: publicEvent.type.replace(/session/gi, "run").replace(/turn/gi, "step") }
+            : {})
+        };
+      })
+    : trueForge.events;
+
+  return { ...value, run: publicRun, trueForge: { ...trueForge, result, events } };
+}
+
+function safePublicMarkdown(value: string): string {
+  return value
+    .replace(/(?:\/tmp|\/workspace|\/home\/[^/\s]+)\/[^\s),;]+/g, "[sandbox path]")
+    .replace(/\b[A-Za-z]:\\[^\s),;]+/g, "[local path]")
+    .replace(/<[^>\n]*>/g, "")
+    .split(/\r?\n/)
+    .map((line) => redactHarnessText(line).trimEnd())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function ensureDashboardUrl(value: unknown): unknown {
@@ -1216,10 +1288,10 @@ export function buildGitHubStatusComment(record: PersistedWebhookRunRecord, kind
       `| Regression suite | ${commentProofText(result.proof?.regressions, "Passed", 180)} |`,
       "",
       "### Root cause",
-      safeCommentText(result.rootCauseSummary ?? summarizeCommentText(result.summary), 360),
+      safeCommentMarkdown(result.rootCauseSummary ?? summarizeCommentText(result.summary), 360),
       "",
       "### Proposed fix",
-      safeCommentText(result.proposedFixSummary ?? summarizeCommentText(result.candidatePatch.body), 360),
+      safeCommentMarkdown(result.proposedFixSummary ?? summarizeCommentText(result.candidatePatch.body), 360),
       "",
       `**Patch:** ${result.candidatePatch.files.length} file${result.candidatePatch.files.length === 1 ? "" : "s"} · review on the dashboard before approval`,
       `**Files:** ${result.candidatePatch.files.map((file) => `\`${safeCommentText(file.path, 180)}\``).join(", ")}`
@@ -1243,7 +1315,7 @@ export function buildGitHubStatusComment(record: PersistedWebhookRunRecord, kind
       `| Regression suite | ${commentProofText(result.proof?.regressions, "Passed", 180)} |`,
       "",
       "### Finding",
-      safeCommentText(result.rootCauseSummary ?? summarizeCommentText(result.summary), 360),
+      safeCommentMarkdown(result.rootCauseSummary ?? summarizeCommentText(result.summary), 360),
       "",
       "No candidate patch was returned, so ReproSmith did not request repository write approval.",
       `**[View verification evidence →](${runUrl})**`
@@ -1269,24 +1341,22 @@ export function buildGitHubStatusComment(record: PersistedWebhookRunRecord, kind
     );
   }
 
-  lines.push(
-    "",
-    "<details>",
-    "<summary>Technical details</summary>",
-    "",
-    `Run: \`${safeCommentText(record.run.id, 180)}\``,
-    `Base branch: \`${safeCommentText(record.baseBranch, 120)}\``,
-    ...(result?.candidatePatch ? [`Patch hash: \`${result.candidatePatch.hash}\``] : []),
-    ...(record.trueForge.session?.id ? [`TrueForge session: \`${safeCommentText(record.trueForge.session.id, 180)}\``] : []),
-    "",
-    "</details>"
-  );
-
   return lines.join("\n");
 }
 
 function safeCommentText(value: string, maxBytes: number): string {
   return clampText(redactHarnessText(value), maxBytes);
+}
+
+function safeCommentMarkdown(value: string, maxBytes: number): string {
+  const redactedLines = value
+    .replace(/<[^>\n]*>/g, "")
+    .split(/\r?\n/)
+    .map((line) => redactHarnessText(line).trimEnd())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return clampText(redactedLines, maxBytes);
 }
 
 function commentProofText(value: string | undefined, fallback: string, maxBytes: number): string {

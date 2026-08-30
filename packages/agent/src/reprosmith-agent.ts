@@ -15,15 +15,15 @@ const reproSmithResultSchema = {
           type: "string",
           enum: ["patch-ready", "verified", "not-reproduced", "blocked", "failed"]
         },
-        summary: { type: "string" },
+        summary: { type: "string", description: "Concise, public-safe GitHub-flavored Markdown summary." },
         proof: {
           type: "object",
           additionalProperties: false,
           properties: {
-            before: { type: "string" },
-            after: { type: "string" },
-            regressions: { type: "string" },
-            attempts: { type: "string" }
+            before: { type: "string", description: "Concise GitHub-flavored Markdown describing the verified pre-fix failure." },
+            after: { type: "string", description: "Concise GitHub-flavored Markdown describing post-fix validation." },
+            regressions: { type: "string", description: "Concise GitHub-flavored Markdown describing focused regression checks." },
+            attempts: { type: "string", description: "Short reproduction count, for example `3/3 matching failures`." }
           },
           required: ["before", "after", "regressions", "attempts"]
         },
@@ -34,7 +34,7 @@ const reproSmithResultSchema = {
               additionalProperties: false,
               properties: {
                 title: { type: "string" },
-                body: { type: "string" },
+                body: { type: "string", description: "Concise, public-safe GitHub-flavored Markdown explaining the proposed remedy." },
                 files: {
                   type: "array",
                   items: {
@@ -72,11 +72,13 @@ export function buildReproSmithAgentSpec(config: TrueForgeRuntimeConfig) {
       "Use sandbox execution to reproduce failures.",
       "For AgentRouter compatibility, never paste repository source or test contents into base64 blobs, encoded strings, or long shell command arguments. Do not use base64, base64 -d, xxd, or echo-based source transfer. For public repositories, fetch needed files directly from raw.githubusercontent.com with a bounded curl request; otherwise use the available sandbox file API. Keep shell commands short and never place credentials or credential-like values in them.",
       "Start with files named by the issue, the relevant source, and focused tests. Do not read README, docs, environment files, CI configuration, credential files, or unrelated examples unless the issue explicitly requires them. Never request, print, or reproduce secrets or environment-variable values.",
+      "Write every public-facing text field (summary, proof fields, and candidatePatch.body) as concise GitHub-flavored Markdown. Use short paragraphs, bullets, inline code, and tables only when they improve scanning. Do not use raw HTML, fenced chain-of-thought, hidden reasoning, absolute sandbox paths, session or turn IDs, patch hashes, credentials, environment values, or internal routing metadata. The outer final response must still be the exact raw JSON object required by the schema, not a Markdown fence.",
       "Keep repository reads focused and bounded; prefer the smallest set of source and test files needed to reproduce the issue.",
       "This is an unattended webhook run. Do not create subagents or generative UI; keep the investigation in the main agent so the bounded reproduction and final proof contract are not paused behind an interactive capability.",
       "Detect the project language and toolchain from issue-relevant manifests only (for example package.json, pyproject.toml, requirements.txt, go.mod, Cargo.toml, pom.xml, or build.gradle). Never assume Node.js.",
       "The sandbox may not include the detected runtime or package manager. Check versions before installing dependencies; if a runtime is missing, install a portable user-space toolchain under /tmp/reprosmith-tools using an official archive or the available package manager, add it to PATH for the current turn, and keep the download/install bounded. For a Node repository with no node/npm/corepack, immediately use one bounded command such as `mkdir -p /tmp/reprosmith-tools && cd /tmp/reprosmith-tools && curl -A 'Mozilla/5.0' -fsSL --max-time 45 https://nodejs.org/dist/v22.14.0/node-v22.14.0-linux-x64.tar.gz -o node.tar.gz && tar -xzf node.tar.gz && export PATH=/tmp/reprosmith-tools/node-v22.14.0-linux-x64/bin:$PATH && node --version && corepack pnpm --version`; use wget with the same User-Agent if curl is unavailable. Do not declare the environment blocked until this portable bootstrap has been attempted and its bounded failure is recorded. Prefer npm or corepack for Node, venv and pip for Python, the official Go archive for Go, and rustup with the minimal profile for Rust. Do not use credentials or modify the base image.",
       "Run the smallest reproducer supplied by the issue before installing the whole workspace. Do not run workspace-wide install, build, or test commands when a focused package-level reproducer is sufficient. If the required runtime cannot be installed safely or a bounded dependency install times out, report the environment as blocked; do not retry the same stalled command indefinitely.",
+      "As soon as the smallest dependency-free reproducer reaches the target failure, immediately run that exact command two more times and record the 3/3 result before invoking a package test runner or installing dependencies. A broad or focused package suite does not substitute for this 3/3 target check. Do not use npx to download a test runner merely to confirm a failure already reachable with the installed runtime. If a later package test stalls, preserve the completed direct-reproducer evidence and continue with the smallest bounded after-patch and regression checks available.",
       "Require human approval before any GitHub write.",
       "Do not ask the user questions or wait for approval; this is an unattended run. If evidence is incomplete, finish with a blocked or failed result instead.",
       "Stop and report evidence when execution is blocked by security policy.",
@@ -129,9 +131,11 @@ export function buildInitialUserMessage(input: StartReproSmithSessionInput): str
     "4. Detect the repository language and required runtime from focused manifests; do not assume Node.js.",
     "5. If the runtime or package manager is missing, install a bounded portable user-space toolchain under /tmp/reprosmith-tools and add it to PATH. Use the smallest official runtime needed for this issue; report blocked if that cannot be done safely.",
     "6. Execute the smallest supplied reproducer in the sandbox before any broad dependency installation.",
+    "6a. When that reproducer reaches the target failure, repeat the exact command immediately until 3/3 attempts are recorded before running package tests or installing more dependencies.",
     "7. Require the same target failure 3/3 before verification.",
     "8. Prepare a complete candidatePatch with exact final file contents if the fix is verified.",
     "9. Pause before any GitHub mutation.",
+    "9a. Write summary, proof fields, and candidatePatch.body as concise, public-safe GitHub-flavored Markdown. Omit secrets, environment values, absolute sandbox paths, internal IDs, hashes, and private reasoning.",
     "10. Call the read-only submit_reprosmith_result MCP tool with exactly one JSON object using this shape; then finish with the same object as the final response (do not wrap it in markdown):",
     '{"kind":"reprosmith.result","status":"patch-ready","summary":"...","proof":{"before":"...","after":"...","regressions":"...","attempts":"3/3"},"candidatePatch":{"title":"...","body":"...","files":[{"path":"src/file.ts","content":"full file content"}]}}',
     "Use status=not-reproduced, blocked, or failed and set candidatePatch to null when proof is incomplete."
@@ -143,6 +147,7 @@ export function buildProofContractRecoveryMessage(): string {
     "Your analysis turn is complete. Do not call tools and do not perform more investigation.",
     "The runtime did not receive a valid reprosmith.result object from the previous final response.",
     "Convert only evidence actually observed in this session into exactly one raw JSON object using the enforced reprosmith_result schema.",
+    "Keep all public-facing text fields concise and format them as GitHub-flavored Markdown. Omit secrets, environment values, absolute sandbox paths, internal IDs, hashes, and private reasoning.",
     "Do not invent commands, test results, files, or a patch. If the evidence is incomplete, use status=blocked or failed and candidatePatch=null.",
     "Call the read-only submit_reprosmith_result MCP tool with that exact object if it is available, then return the same object with no markdown, fence, or prose."
   ].join("\n");

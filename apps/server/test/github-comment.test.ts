@@ -75,6 +75,9 @@ describe("GitHub status comment rendering", () => {
     }), "completed");
     expect(body).toContain("https://reprosmith.test/runs/run-25/review");
     expect(body).toContain("TrueForge is paused");
-    expect(body).toContain("Technical details");
+    expect(body).not.toContain("Technical details");
+    expect(body).not.toContain("session-25");
+    expect(body).not.toContain(patch.hash);
+    expect(body).not.toContain("Base branch");
   });
 });

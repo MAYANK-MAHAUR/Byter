@@ -276,19 +276,25 @@ export function toDashboardRunFromWebhook(record: WebhookRunRecord): DashboardRu
   const livePatch = liveResult?.candidatePatch;
   const pullRequest = liveResult?.pullRequest;
   const trueForgeDetail =
-    record.trueForge?.session?.id ??
-    liveResult?.summary ??
+    (liveResult?.summary ? publicSafeMarkdown(liveResult.summary) : undefined) ??
     record.trueForge?.reason ??
     record.trueForge?.error ??
     "No TrueForge metadata returned";
   const trueForgeBlocked = trueForgeStatus === "failed" || trueForgeStatus === "not-configured" || liveResult?.status === "failed";
   const issueBodySize = new Blob([record.issueBody]).size;
-  const trace = record.trueForge?.events ?? [];
+  const trace = (record.trueForge?.events ?? []).map(sanitizeTraceEvent);
   const commentHistory = record.githubComments ?? (record.githubStatusComment ? [{ ...record.githubStatusComment, kind: "legacy" as const, createdAt: record.receivedAt }] : []);
   const latestComment = commentHistory.at(-1);
 
   return {
     ...record.run,
+    events: record.run.events.map((event) => ({
+      ...event,
+      message: publicSafeMarkdown(event.message)
+        .replace(/TrueForge session started/gi, "TrueForge investigation started")
+        .replace(/\bsession\b/gi, "investigation")
+        .replace(/\bturn\b/gi, "step")
+    })),
     generatedAt: record.receivedAt,
     source: "webhook",
     sourceLabel: "latest GitHub webhook",
@@ -298,9 +304,9 @@ export function toDashboardRunFromWebhook(record: WebhookRunRecord): DashboardRu
     runtime: trueForgeStatus === "started" || liveResult ? "TrueForge Agent Harness" : "Webhook intake",
     model: record.trueForge?.model ?? (trueForgeStatus === "started" || liveResult ? "Configured by TrueForge" : "Not started"),
     currentBranch: livePatch?.branchName ?? `delivery ${record.deliveryId}`,
-    ...(liveResult?.summary ? { summary: liveResult.summary } : {}),
-    ...(liveResult?.rootCauseSummary ? { rootCauseSummary: liveResult.rootCauseSummary } : {}),
-    ...(liveResult?.proposedFixSummary ? { proposedFixSummary: liveResult.proposedFixSummary } : {}),
+    ...(liveResult?.summary ? { summary: publicSafeMarkdown(liveResult.summary) } : {}),
+    ...(liveResult?.rootCauseSummary ? { rootCauseSummary: publicSafeMarkdown(liveResult.rootCauseSummary) } : {}),
+    ...(liveResult?.proposedFixSummary ? { proposedFixSummary: publicSafeMarkdown(liveResult.proposedFixSummary) } : {}),
     ...(liveResult?.baseSha ? { baseSha: liveResult.baseSha } : {}),
     ...(livePatch
       ? {
@@ -310,7 +316,7 @@ export function toDashboardRunFromWebhook(record: WebhookRunRecord): DashboardRu
             fileContents: livePatch.files,
             hash: livePatch.hash,
             verifiedAt: livePatch.verifiedAt,
-            body: livePatch.body
+            body: publicSafeMarkdown(livePatch.body)
           }
       }
       : {}),
@@ -324,7 +330,7 @@ export function toDashboardRunFromWebhook(record: WebhookRunRecord): DashboardRu
       sessionId: record.trueForge?.session?.id,
       turnId: record.trueForge?.turn?.id,
       status: harnessStatusFor(record.run.status, trueForgeStatus, liveResult?.status),
-      currentTask: currentTaskFor(record.run.status, liveResult?.summary),
+      currentTask: currentTaskFor(record.run.status, liveResult?.summary ? publicSafeMarkdown(liveResult.summary) : undefined),
       trace,
       mcpCalls: trace.filter((event) => event.category === "mcp" && event.type !== "mcp.initialize").length,
       sandboxExecutions: trace.filter((event) => event.category === "sandbox" && (event.command || event.sandboxId || event.stdout || event.stderr)).length,
@@ -412,14 +418,36 @@ export const approvalActions: ApprovalAction[] = [
 ];
 
 function buildLiveTests(proof: { before?: string; after?: string; regressions?: string; attempts?: string } | undefined, trace: HarnessTraceEvent[]): DashboardRun["tests"] {
+  const safeProof = proof
+    ? Object.fromEntries(Object.entries(proof).map(([key, value]) => [key, value ? publicSafeMarkdown(value) : value])) as typeof proof
+    : undefined;
   const reproductionLog = trace
     .filter((event) => event.category === "sandbox" && (event.stdout || event.stderr))
     .map((event) => [event.command ? `$ ${event.command}` : undefined, event.stdout, event.stderr].filter(Boolean).join("\n"))
-    .join("\n\n");
+    .join("\n\n")
+    .slice(0, 12_000);
   return [
-    { id: "reproduction", label: "Reproduction", status: proof?.before ? "passed" : "pending", detail: proof?.attempts ?? "Awaiting reproduction evidence", log: reproductionLog || undefined },
-    { id: "after", label: "After patch", status: proof?.after ? "passed" : "pending", detail: proof?.after ?? "Awaiting post-patch evidence", log: reproductionLog || undefined },
-    { id: "regression", label: "Regression suite", status: proof?.regressions ? "passed" : "pending", detail: proof?.regressions ?? "Awaiting regression evidence", log: reproductionLog || undefined }
+    {
+      id: "reproduction",
+      label: "Reproduction",
+      status: safeProof?.before ? "passed" : "pending",
+      detail: compactEvidence(safeProof?.attempts ?? safeProof?.before ?? "Awaiting reproduction evidence", 150),
+      log: [safeProof?.before ? boundedMarkdown(safeProof.before, 2_000) : undefined, reproductionLog].filter(Boolean).join("\n\n") || undefined
+    },
+    {
+      id: "after",
+      label: "After patch",
+      status: safeProof?.after ? "passed" : "pending",
+      detail: compactEvidence(safeProof?.after ?? "Awaiting post-patch evidence", 170),
+      log: safeProof?.after ? boundedMarkdown(safeProof.after, 2_000) : undefined
+    },
+    {
+      id: "regression",
+      label: "Regression suite",
+      status: safeProof?.regressions ? "passed" : "pending",
+      detail: compactEvidence(safeProof?.regressions ?? "Awaiting regression evidence", 170),
+      log: safeProof?.regressions ? boundedMarkdown(safeProof.regressions, 3_000) : undefined
+    }
   ];
 }
 
@@ -493,16 +521,51 @@ function currentTaskFor(runStatus: RunStatus, summary?: string): string {
 
 function compactProof(proof: { before?: string; after?: string; regressions?: string; attempts?: string }) {
   return {
-    ...(proof.before ? { before: compactEvidence(proof.before, 360) } : {}),
-    ...(proof.after ? { after: compactEvidence(proof.after, 360) } : {}),
-    ...(proof.regressions ? { regressions: compactEvidence(proof.regressions, 420) } : {}),
-    ...(proof.attempts ? { attempts: compactEvidence(proof.attempts, 160) } : {})
+    ...(proof.before ? { before: boundedMarkdown(publicSafeMarkdown(proof.before), 1_200) } : {}),
+    ...(proof.after ? { after: boundedMarkdown(publicSafeMarkdown(proof.after), 1_200) } : {}),
+    ...(proof.regressions ? { regressions: boundedMarkdown(publicSafeMarkdown(proof.regressions), 1_600) } : {}),
+    ...(proof.attempts ? { attempts: boundedMarkdown(publicSafeMarkdown(proof.attempts), 300) } : {})
   };
 }
 
 function compactEvidence(value: string, maxLength: number): string {
   const compact = value.replace(/\s+/g, " ").trim();
   return compact.length <= maxLength ? compact : `${compact.slice(0, maxLength - 1).trimEnd()}...`;
+}
+
+function boundedMarkdown(value: string, maxLength: number): string {
+  const clean = value.replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  return clean.length <= maxLength ? clean : `${clean.slice(0, maxLength - 3).trimEnd()}...`;
+}
+
+function publicSafeMarkdown(value: string): string {
+  return value
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer [REDACTED]")
+    .replace(/(?:api[_-]?key|token|secret|password)\s*[:=]\s*[^\s,;]+/gi, "[REDACTED]")
+    .replace(/\bsk-[A-Za-z0-9_-]+\b/g, "[REDACTED]")
+    .replace(/\bgh[pousr]_[A-Za-z0-9_]+\b/g, "[REDACTED]")
+    .replace(/(?:\/tmp|\/workspace|\/home\/[^/\s]+)\/[^\s),;]+/g, "[sandbox path]")
+    .replace(/\b[A-Za-z]:\\[^\s),;]+/g, "[local path]")
+    .replace(/<[^>\n]*>/g, "")
+    .trim();
+}
+
+function sanitizeTraceEvent(event: HarnessTraceEvent): HarnessTraceEvent {
+  const sanitize = (value: string | undefined) => value
+    ? publicSafeMarkdown(value).replace(/\bsession\b/gi, "run").replace(/\bturn\b/gi, "step")
+    : undefined;
+  return {
+    ...event,
+    category: event.category === "session" ? "agent" : event.category,
+    summary: sanitize(event.summary) ?? "Activity recorded",
+    ...(event.target ? { target: sanitize(event.target) } : {}),
+    ...(event.command ? { command: sanitize(event.command) } : {}),
+    ...(event.stdout ? { stdout: sanitize(event.stdout) } : {}),
+    ...(event.stderr ? { stderr: sanitize(event.stderr) } : {}),
+    sandboxId: undefined,
+    sequenceNumber: undefined,
+    mcpServer: undefined
+  };
 }
 
 function buildDemoHarness(summary: DemoRunSummary): HarnessState {
