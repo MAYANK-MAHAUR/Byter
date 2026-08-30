@@ -1164,6 +1164,7 @@ export function buildGitHubStatusComment(record: PersistedWebhookRunRecord, kind
   const result = record.trueForge.result;
   const pullRequest = result?.pullRequest;
   const reviewUrl = record.dashboardUrl ? `${record.dashboardUrl.replace(/\/$/, "")}/review` : "#";
+  const runUrl = record.dashboardUrl ?? "#";
   const lines = [
     `<!-- reprosmith-run:${record.run.id} -->`,
     `## ReproSmith · ${status.label}`,
@@ -1174,7 +1175,37 @@ export function buildGitHubStatusComment(record: PersistedWebhookRunRecord, kind
     `[Open ReproSmith run →](${record.dashboardUrl ?? "#"})`
   ];
 
-  if (result?.candidatePatch && hasGenuineProof(result)) {
+  if (!record.scan.safeToExecute || record.run.status === "security-review") {
+    lines.push(
+      "",
+      "ReproSmith detected potentially unsafe reproduction instructions and held execution.",
+      "",
+      "**Execution:** Blocked",
+      "**GitHub writes:** None",
+      "",
+      `**[Review security analysis ->](${runUrl})**`
+    );
+  } else if (record.run.status === "needs-info") {
+    lines.push(
+      "",
+      "ReproSmith could not build a reliable reproduction from the current report.",
+      "",
+      "**Next step:** Add the missing runtime, input, or expected-output details and trigger a new run.",
+      "",
+      `**[View investigation ->](${runUrl})**`
+    );
+  } else if (record.run.status === "not-reproduced") {
+    lines.push(
+      "",
+      "ReproSmith built the reported environment but did not observe the claimed failure.",
+      "",
+      `**Reproduction attempts:** ${safeCommentText(result?.proof?.attempts ?? "No matching failure observed", 180)}`,
+      "",
+      "This does not prove the bug does not exist.",
+      "",
+      `**[View evidence ->](${runUrl})**`
+    );
+  } else if (result?.candidatePatch && hasGenuineProof(result)) {
     lines.push(
       "",
       "### Evidence",
@@ -1185,10 +1216,10 @@ export function buildGitHubStatusComment(record: PersistedWebhookRunRecord, kind
       `| Regression suite | ${safeCommentText(result.proof?.regressions ?? "Verified", 260)} |`,
       "",
       "### Root cause",
-      safeCommentText(result.rootCauseSummary ?? summarizeCommentText(result.summary), 520),
+      safeCommentText(result.rootCauseSummary ?? summarizeCommentText(result.summary), 360),
       "",
       "### Proposed fix",
-      safeCommentText(result.proposedFixSummary ?? summarizeCommentText(result.candidatePatch.body), 520),
+      safeCommentText(result.proposedFixSummary ?? summarizeCommentText(result.candidatePatch.body), 360),
       "",
       `**Patch:** ${result.candidatePatch.files.length} file${result.candidatePatch.files.length === 1 ? "" : "s"} · review on the dashboard before approval`,
       `**Files:** ${result.candidatePatch.files.map((file) => `\`${safeCommentText(file.path, 180)}\``).join(", ")}`
@@ -1201,6 +1232,22 @@ export function buildGitHubStatusComment(record: PersistedWebhookRunRecord, kind
         `**[Review evidence & approve patch →](${reviewUrl})**`
       );
     }
+  } else if (result && hasGenuineProof(result)) {
+    lines.push(
+      "",
+      "### Evidence",
+      "| Check | Result |",
+      "| --- | --- |",
+      `| Reproduction | ${safeCommentText(result.proof?.attempts ?? "Verified", 180)} |`,
+      `| Before / after | ${safeCommentText(result.proof?.before ?? "Observed", 260)} → ${safeCommentText(result.proof?.after ?? "Validated", 260)} |`,
+      `| Regression suite | ${safeCommentText(result.proof?.regressions ?? "Verified", 260)} |`,
+      "",
+      "### Finding",
+      safeCommentText(result.rootCauseSummary ?? summarizeCommentText(result.summary), 360),
+      "",
+      "No candidate patch was returned, so ReproSmith did not request repository write approval.",
+      `**[View verification evidence →](${runUrl})**`
+    );
   } else if (record.run.status === "failed") {
     lines.push(
       "",
@@ -1264,16 +1311,28 @@ function commentUpdateLabel(kind: GitHubCommentKind): string {
 
 function summarizeCommentText(value: string): string {
   const compact = value.replace(/\s+/g, " ").trim();
-  const first = compact.match(/^.{1,460}?(?:[.!?](?:\s|$)|$)/)?.[0] ?? compact;
-  return clampText(first, 520);
+  const sentences = compact.match(/[^.!?]+[.!?](?:\s|$)/g)?.slice(0, 2).join(" ").trim();
+  return clampText(sentences || compact, 360);
 }
 
 function githubCommentStatus(record: PersistedWebhookRunRecord): { label: string; detail: string } {
+  if (!record.scan.safeToExecute || record.run.status === "security-review") {
+    return { label: "Security review", detail: "Execution was held after the issue text failed the safety scan." };
+  }
   if (record.run.status === "pr-created") {
     return { label: "Fix proposed", detail: "Approved patch validated; draft pull request created." };
   }
+  if (record.run.status === "needs-info") {
+    return { label: "Needs information", detail: "The issue needs more detail before ReproSmith can reproduce it." };
+  }
+  if (record.run.status === "not-reproduced") {
+    return { label: "Not reproduced", detail: "The reported failure was not observed in the investigated environment." };
+  }
   if (record.run.status === "awaiting-approval") {
     return { label: "Patch ready for review", detail: "Verified evidence is ready; TrueForge is paused before GitHub writes." };
+  }
+  if (record.run.status === "patch-ready" || record.run.status === "verified") {
+    return { label: "Verified", detail: "The reported failure is backed by executable evidence." };
   }
   if (record.run.status === "rejected") {
     return { label: "Run rejected", detail: "The run was stopped before repository mutation." };
@@ -1282,6 +1341,12 @@ function githubCommentStatus(record: PersistedWebhookRunRecord): { label: string
     return { label: "Run failed", detail: record.trueForge.error ?? "TrueForge did not complete successfully." };
   }
   if (record.trueForge.status === "started") {
+    if (record.run.status === "reproducing") {
+      return { label: "Reproducing", detail: "TrueForge is running the reported scenario in an isolated environment." };
+    }
+    if (record.run.status === "environment-building") {
+      return { label: "Environment building", detail: "TrueForge is preparing an isolated environment for reproduction." };
+    }
     return { label: "Investigating", detail: "TrueForge is inspecting the issue and collecting executable evidence." };
   }
   return { label: "Investigation queued", detail: "ReproSmith accepted the signed issue and is preparing the investigation." };

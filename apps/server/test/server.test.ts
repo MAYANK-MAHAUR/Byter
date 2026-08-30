@@ -513,7 +513,7 @@ describe("ReproSmith production server", () => {
       expect(latest.githubComments).toHaveLength(1);
       expect(latest.verifiedLabel.name).toBe("reprosmith:verified");
       expect(githubClient.createIssueComment).toHaveBeenCalledTimes(1);
-      expect(githubClient.createIssueComment.mock.calls[0]?.[3]).toContain("## ReproSmith · Investigating");
+      expect(githubClient.createIssueComment.mock.calls[0]?.[3]).toContain("## ReproSmith · Environment building");
       expect(githubClient.createIssueComment.mock.calls[0]?.[3]).not.toContain("approve");
       expect(githubClient.updateIssueComment).toHaveBeenCalledTimes(1);
       expect(githubClient.updateIssueComment.mock.calls[0]?.[3]).toContain("### Proposed fix");
