@@ -14,4 +14,8 @@ describe("tokenizePattern", () => {
   it("captures the seeded trailing escape bug for the demo issue", () => {
     expect(() => tokenizePattern("\\")).toThrow(/toLowerCase/);
   });
+
+  it("preserves the case of escaped literals", () => {
+    expect(tokenizePattern("\\A")).toEqual([{ type: "literal", value: "A" }]);
+  });
 });

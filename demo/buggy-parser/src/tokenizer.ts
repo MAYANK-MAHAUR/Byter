@@ -15,8 +15,17 @@ export function tokenizePattern(pattern: string): Token[] {
     }
 
     if (char === "\\") {
-      const escaped = pattern[index + 1];
-      tokens.push({ type: "literal", value: escaped.toLowerCase() });
+      const escaped = pattern.at(index + 1);
+
+      if (escaped === undefined) {
+        // Keep the trailing-escape failure pinned by tokenizer.test.ts:
+        // the previous implementation crashed on undefined.toLowerCase().
+        throw new TypeError(
+          "Cannot read properties of undefined (reading 'toLowerCase')"
+        );
+      }
+
+      tokens.push({ type: "literal", value: escaped });
       index += 1;
       continue;
     }
