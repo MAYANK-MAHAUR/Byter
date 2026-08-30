@@ -25,6 +25,18 @@ export interface GitHubIssuePayload {
   installation?: { id: number };
 }
 
+export interface GitHubIssueCommentPayload {
+  action: string;
+  issue: GitHubIssuePayload["issue"];
+  repository: GitHubIssuePayload["repository"];
+  comment: {
+    body: string | null;
+    html_url?: string;
+    user?: { login: string };
+    author_association?: string;
+  };
+}
+
 export function signWebhookPayload(payload: string | Buffer, secret: string): string {
   const digest = createHmac("sha256", secret).update(payload).digest("hex");
   return `sha256=${digest}`;
@@ -50,6 +62,16 @@ export function parseIssueWebhook(payload: string): GitHubIssuePayload {
 
   if (!parsed.issue || !parsed.repository || typeof parsed.action !== "string") {
     throw new Error("Payload is not a GitHub issues webhook");
+  }
+
+  return parsed;
+}
+
+export function parseIssueCommentWebhook(payload: string): GitHubIssueCommentPayload {
+  const parsed = JSON.parse(payload) as GitHubIssueCommentPayload;
+
+  if (!parsed.issue || !parsed.repository || !parsed.comment || typeof parsed.action !== "string") {
+    throw new Error("Payload is not a GitHub issue comment webhook");
   }
 
   return parsed;

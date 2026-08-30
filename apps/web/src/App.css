@@ -363,3 +363,54 @@ button:focus-visible, a:focus-visible, summary:focus-visible {
   outline: 3px solid #1554b6;
   outline-offset: 3px;
 }
+
+/* Review surfaces keep long evidence readable while preserving the color-coded gate. */
+.overview-grid > *, .panel, .panel-title, .approval-panel, .why-panel { min-width: 0; }
+.panel-title h2, .approval-panel .panel-title h2 { max-width: 100%; overflow-wrap: anywhere; line-height: 1.2; }
+.finding-callout > div, .proof-point > div, .approval-state, .github-approval-guide { min-width: 0; }
+.finding-callout strong, .finding-callout p, .proof-point strong { overflow-wrap: anywhere; }
+.finding-callout strong { font-size: 0.9rem; line-height: 1.45; }
+.finding-callout p { max-width: 72ch; line-height: 1.5; }
+.approval-meta code { display: inline-block; max-width: 100%; color: #243a56; overflow-wrap: anywhere; }
+.control-label { margin: 0 0 1px; color: var(--muted); font-size: 0.68rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; }
+
+.label-chip { display: inline-flex; min-height: 22px; align-items: center; padding: 2px 7px; border: 1px solid currentColor; font-family: var(--mono); font-size: 0.64rem !important; font-weight: 800; line-height: 1; text-transform: lowercase; }
+.label-valid { color: #a54ac4 !important; background: #f8eaff; }
+.label-waiting { color: #ff7b72 !important; background: #4a1f2b; }
+.label-error { color: #ffb7ad !important; background: #552426; }
+
+.github-approval-guide { margin: 14px 0; padding: 13px; border: 2px solid #8a6bc5; background: #f6f0ff; color: #33215f; }
+.github-approval-guide > strong { display: block; font-size: 0.84rem; }
+.github-approval-guide p { margin: 5px 0 10px; color: #554574; font-size: 0.75rem; line-height: 1.45; }
+.github-approval-guide small { display: block; margin-top: 8px; color: #665782; font-size: 0.68rem; line-height: 1.4; }
+.github-approval-command { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+.github-approval-command code { flex: 1 1 auto; min-width: 0; padding: 9px; background: #10243d; color: #f5f9ff; font-family: var(--mono); font-size: 0.69rem; line-height: 1.5; overflow-wrap: anywhere; }
+.copy-command { display: grid; width: 38px; height: 38px; flex: 0 0 auto; place-items: center; border: 2px solid #8a6bc5; background: #fff; color: #5e429d; cursor: pointer; }
+.copy-command:hover, .copy-command:focus-visible { border-color: #1554b6; background: #e8f0ff; color: #1554b6; }
+
+.patch-file-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-top: 17px; }
+.patch-file-heading p { margin: 0; }
+.patch-file-heading > span { color: var(--muted); font-family: var(--mono); font-size: 0.68rem; }
+.remedy-box { margin: 14px 0; padding: 13px; border-left: 4px solid #8a6bc5; background: #f6f0ff; color: #33215f; }
+.remedy-box p { margin: 5px 0 0; color: #554574; font-size: 0.78rem; line-height: 1.52; overflow-wrap: anywhere; }
+.remedy-box .eyebrow { margin: 0; color: #5e429d; }
+.patch-file-list { display: grid; gap: 9px; margin-top: 10px; }
+.patch-file { border: 2px solid #b8c4d3; background: #f8fbfe; }
+.patch-file summary { display: flex; align-items: center; gap: 8px; min-height: 39px; padding: 8px 10px; color: #1554b6; font-family: var(--mono); font-size: 0.72rem; font-weight: 800; overflow-wrap: anywhere; }
+.patch-file summary svg { flex: 0 0 auto; }
+.patch-file summary::-webkit-details-marker { display: none; }
+.patch-file summary:hover { background: #e8f0ff; }
+.patch-file-content { max-height: 460px; margin: 0; overflow: auto; padding: 12px; border-top: 1px solid #3f638b; background: #10243d; color: #e6f1ff; font-family: var(--mono); font-size: 0.69rem; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+@media (max-width: 1120px) {
+  .overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .approval-panel { grid-column: span 2; }
+}
+
+@media (max-width: 760px) {
+  .overview-grid { grid-template-columns: minmax(0, 1fr); }
+  .approval-panel { grid-column: auto; }
+  .github-approval-command { align-items: stretch; }
+  .github-approval-command code { min-height: 38px; }
+  .patch-file-content { max-height: 380px; }
+}

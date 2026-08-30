@@ -162,14 +162,30 @@ describe("GitHubRestClient", () => {
     }) as typeof fetch;
     const client = new GitHubRestClient({ token: "token", apiBaseUrl: "https://api.github.test", fetchImpl });
 
-    await client.createLabel("owner", "repo", "reprosmith:verified", "111111", "Issue verified by reproducible evidence");
+    await client.createLabel("owner", "repo", "reprosmith:verified", "8250df", "Issue verified by reproducible evidence");
 
     expect(calls[0]?.url).toBe("https://api.github.test/repos/owner/repo/labels");
     expect(calls[0]?.init.method).toBe("POST");
     expect(JSON.parse(calls[0]?.init.body as string)).toEqual({
       name: "reprosmith:verified",
-      color: "111111",
+      color: "8250df",
       description: "Issue verified by reproducible evidence"
     });
+  });
+
+  it("reads collaborator permissions and removes issue labels", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), init: init ?? {} });
+      return new Response(JSON.stringify({ permission: "maintain" }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+    const client = new GitHubRestClient({ token: "token", apiBaseUrl: "https://api.github.test", fetchImpl });
+
+    await expect(client.getCollaboratorPermission("owner", "repo", "maintainer-name")).resolves.toEqual({ permission: "maintain" });
+    await client.removeLabel("owner", "repo", 17, "reprosmith:awaiting-approval");
+
+    expect(calls[0]?.url).toBe("https://api.github.test/repos/owner/repo/collaborators/maintainer-name/permission");
+    expect(calls[1]?.url).toBe("https://api.github.test/repos/owner/repo/issues/17/labels/reprosmith%3Aawaiting-approval");
+    expect(calls[1]?.init.method).toBe("DELETE");
   });
 });

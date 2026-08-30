@@ -21,7 +21,12 @@ import type {
 } from "@reprosmith/agent";
 import { canTransition, createRun, scanIssueText, transitionRun } from "@reprosmith/core";
 import { runDemo, type DemoRunSummary } from "@reprosmith/demo-runner";
-import { GitHubRestClient, parseIssueWebhook, verifyGitHubWebhook } from "@reprosmith/github";
+import {
+  GitHubRestClient,
+  parseIssueCommentWebhook,
+  parseIssueWebhook,
+  verifyGitHubWebhook
+} from "@reprosmith/github";
 
 type ApprovalActionId = "approve-pr" | "request-diff" | "reject-run";
 type GitHubCommentKind = "started" | "completed" | "failed" | "approval";
@@ -120,6 +125,7 @@ interface PersistedWebhookRunRecord {
   githubStatusComment?: { id?: number; url: string };
   githubComments?: Array<{ id?: number; url: string; kind: GitHubCommentKind; createdAt: string }>;
   verifiedLabel?: { name: "reprosmith:verified"; appliedAt?: string; error?: string };
+  approvalLabel?: { name: "reprosmith:awaiting-approval"; appliedAt?: string; error?: string };
   run: ReturnType<typeof createRun>;
   scan: ReturnType<typeof scanIssueText>;
   trueForge: {
@@ -187,7 +193,8 @@ export function createReproSmithServer(options: ReproSmithServerOptions = {}): S
           response,
           dataDir ? resolve(dataDir) : undefined,
           trueForgeRuntime,
-          githubClient
+          githubClient,
+          githubTools
         );
         return;
       }
@@ -210,7 +217,8 @@ async function handleGitHubWebhook(
   response: ServerResponse,
   dataDir: string | undefined,
   trueForgeRuntime: ReproSmithSessionStarter | undefined,
-  githubClient: GitHubRestClientLike | undefined
+  githubClient: GitHubRestClientLike | undefined,
+  githubTools: GitHubWriteTools | undefined
 ): Promise<void> {
   if (request.method !== "POST") {
     sendJson(response, 405, { error: "Method not allowed" });
@@ -247,8 +255,13 @@ async function handleGitHubWebhook(
   }
 
   const eventName = headerValue(request, "x-github-event");
-  if (eventName && eventName !== "issues") {
+  if (eventName && eventName !== "issues" && eventName !== "issue_comment") {
     sendJson(response, 202, { ignored: true, reason: `Unsupported GitHub event: ${eventName}` });
+    return;
+  }
+
+  if (eventName === "issue_comment") {
+    await handleGitHubIssueCommentWebhook(payload, response, dataDir, githubClient, githubTools);
     return;
   }
 
@@ -319,6 +332,92 @@ async function handleGitHubWebhook(
   }
 
   sendJson(response, 202, commentRecord);
+}
+
+interface GitHubApprovalCommand {
+  runId: string;
+  patchHash: string;
+}
+
+function parseGitHubApprovalCommand(body: string | null): GitHubApprovalCommand | undefined {
+  const match = body?.trim().match(/^\/reprosmith\s+approve\s+(\S+)\s+([a-f0-9]{64})$/i);
+  return match ? { runId: match[1], patchHash: match[2].toLowerCase() } : undefined;
+}
+
+function isMaintainerComment(authorAssociation: string | undefined, permission: string | undefined): boolean {
+  const association = authorAssociation?.toUpperCase();
+  if (association === "OWNER") return true;
+  if (association !== "MEMBER" && association !== "COLLABORATOR") return false;
+  return ["admin", "maintain", "write"].includes(permission?.toLowerCase() ?? "");
+}
+
+async function handleGitHubIssueCommentWebhook(
+  payload: string,
+  response: ServerResponse,
+  dataDir: string,
+  githubClient: GitHubRestClientLike | undefined,
+  githubTools: GitHubWriteTools | undefined
+): Promise<void> {
+  let webhook: ReturnType<typeof parseIssueCommentWebhook>;
+  try {
+    webhook = parseIssueCommentWebhook(payload);
+  } catch {
+    throw new HttpError(400, "Malformed GitHub issue comment webhook payload");
+  }
+
+  if (webhook.action !== "created") {
+    sendJson(response, 202, { ignored: true, reason: `Unsupported issue comment action: ${webhook.action}` });
+    return;
+  }
+
+  const command = parseGitHubApprovalCommand(webhook.comment.body);
+  if (!command) {
+    sendJson(response, 202, { ignored: true, reason: "No ReproSmith approval command" });
+    return;
+  }
+
+  const login = webhook.comment.user?.login;
+  if (!login) {
+    sendJson(response, 403, { error: "GitHub approval commenter could not be identified" });
+    return;
+  }
+
+  let permission: string | undefined;
+  if (webhook.comment.author_association?.toUpperCase() !== "OWNER") {
+    if (!githubClient?.getCollaboratorPermission) {
+      sendJson(response, 403, { error: "Maintainer permission could not be verified" });
+      return;
+    }
+    try {
+      permission = (await githubClient.getCollaboratorPermission(
+        webhook.repository.owner.login,
+        webhook.repository.name,
+        login
+      )).permission;
+    } catch {
+      sendJson(response, 403, { error: "GitHub commenter is not a repository maintainer" });
+      return;
+    }
+  }
+
+  if (!isMaintainerComment(webhook.comment.author_association, permission)) {
+    sendJson(response, 403, { error: "GitHub commenter is not a repository maintainer" });
+    return;
+  }
+
+  const liveRecord = await findPersistedRunById(dataDir, command.runId);
+  const repository = `${webhook.repository.owner.login}/${webhook.repository.name}`;
+  if (
+    !liveRecord ||
+    liveRecord.repository !== repository ||
+    liveRecord.run.issue.issueNumber !== webhook.issue.number
+  ) {
+    sendJson(response, 409, { error: "Approval command does not match a persisted GitHub run" });
+    return;
+  }
+
+  const result = await executeApproval(dataDir, command.runId, "approve-pr", command.patchHash, githubTools, githubClient);
+  sendJson(response, result.statusCode, result.body);
 }
 
 async function handleLatestRun(
@@ -584,37 +683,48 @@ async function handleApproval(
   const actionId = expectApprovalAction(payload.actionId);
   const runId = expectString(payload.runId, "runId");
   const patchHash = expectString(payload.patchHash, "patchHash");
+  const result = await executeApproval(dataDir, runId, actionId, patchHash, githubTools, githubClient);
+  sendJson(response, result.statusCode, result.body);
+}
+
+interface ApprovalExecutionResult {
+  statusCode: number;
+  body: unknown;
+}
+
+async function executeApproval(
+  dataDir: string,
+  runId: string,
+  actionId: ApprovalActionId,
+  patchHash: string,
+  githubTools: GitHubWriteTools | undefined,
+  githubClient: GitHubRestClientLike | undefined
+): Promise<ApprovalExecutionResult> {
   const liveRecord = await findPersistedRunById(dataDir, runId);
   if (!liveRecord) {
     const latestRun = await getDemoRun();
     if (latestRun.run.id !== runId || latestRun.candidatePatch.hash !== patchHash) {
-      sendJson(response, 409, { error: "Approval payload does not match the current run" });
-      return;
+      return { statusCode: 409, body: { error: "Approval payload does not match the current run" } };
     }
 
     const receipt = buildApprovalReceipt(runId, actionId, patchHash, resultStatusFor(actionId), messageFor(actionId));
     await appendApprovalReceipt(dataDir, receipt);
-    sendJson(response, 200, receipt);
-    return;
+    return { statusCode: 200, body: receipt };
   }
 
   const candidatePatch = liveRecord.trueForge.result?.candidatePatch;
   if (!candidatePatch || candidatePatch.hash !== patchHash) {
-    sendJson(response, 409, { error: "Approval payload does not match the live candidate patch" });
-    return;
+    return { statusCode: 409, body: { error: "Approval payload does not match the live candidate patch" } };
   }
   const previousReceipt = await findApprovalReceipt(dataDir, runId, actionId, patchHash);
   if (previousReceipt?.resultStatus === "writing") {
-    sendJson(response, 409, { error: "This approval is already being processed" });
-    return;
+    return { statusCode: 409, body: { error: "This approval is already being processed" } };
   }
   if (previousReceipt && previousReceipt.resultStatus !== "write-failed") {
-    sendJson(response, 200, previousReceipt);
-    return;
+    return { statusCode: 200, body: previousReceipt };
   }
   if (liveRecord.run.status !== "awaiting-approval") {
-    sendJson(response, 409, { error: "Live run is not awaiting approval" });
-    return;
+    return { statusCode: 409, body: { error: "Live run is not awaiting approval" } };
   }
 
   if (actionId !== "approve-pr") {
@@ -624,7 +734,7 @@ async function handleApproval(
     }
     const receipt = buildApprovalReceipt(runId, actionId, patchHash, resultStatusFor(actionId), messageFor(actionId));
     await appendApprovalReceipt(dataDir, receipt);
-    const updatedRecord = await appendGitHubComment({
+    const baseRecord: PersistedWebhookRunRecord = {
       ...liveRecord,
       run,
       trueForge: {
@@ -640,15 +750,17 @@ async function handleApproval(
           artifact: actionId === "reject-run" ? "run stopped" : "write held"
         }])
       }
-    }, githubClient, "approval");
+    };
+    const cleanedRecord = actionId === "reject-run"
+      ? await removeAwaitingApprovalLabel(baseRecord, githubClient)
+      : baseRecord;
+    const updatedRecord = await appendGitHubComment(cleanedRecord, githubClient, "approval");
     await appendUpdatedLiveRecord(dataDir, updatedRecord);
-    sendJson(response, 200, receipt);
-    return;
+    return { statusCode: 200, body: receipt };
   }
 
   if (!githubTools) {
-    sendJson(response, 503, { error: "GitHub write tools are not configured" });
-    return;
+    return { statusCode: 503, body: { error: "GitHub write tools are not configured" } };
   }
 
   const writeArguments = {
@@ -662,8 +774,7 @@ async function handleApproval(
   };
   const expectedPayloadHash = approvalPayloadHash("create_fix_pull_request", writeArguments);
   if (expectedPayloadHash !== candidatePatch.hash) {
-    sendJson(response, 409, { error: "Live candidate patch hash is invalid" });
-    return;
+    return { statusCode: 409, body: { error: "Live candidate patch hash is invalid" } };
   }
 
   const writingReceipt = buildApprovalReceipt(
@@ -691,8 +802,7 @@ async function handleApproval(
       error instanceof Error ? error.message : "GitHub pull request creation failed"
     );
     await appendApprovalReceipt(dataDir, failedReceipt);
-    sendJson(response, 502, { error: failedReceipt.message });
-    return;
+    return { statusCode: 502, body: { error: failedReceipt.message } };
   }
 
   const pullRequest = parsePullRequestToolResult(toolResult);
@@ -731,7 +841,8 @@ async function handleApproval(
       }
     }
   };
-  const commentedRecord = await appendGitHubComment(updatedRecord, githubClient, "approval");
+  const cleanedRecord = await removeAwaitingApprovalLabel(updatedRecord, githubClient);
+  const commentedRecord = await appendGitHubComment(cleanedRecord, githubClient, "approval");
   await appendUpdatedLiveRecord(dataDir, commentedRecord);
   const receipt = buildApprovalReceipt(
     runId,
@@ -742,7 +853,7 @@ async function handleApproval(
     { pullRequest }
   );
   await appendApprovalReceipt(dataDir, receipt);
-  sendJson(response, 200, receipt);
+  return { statusCode: 200, body: receipt };
 }
 
 interface ApprovalReceipt {
@@ -803,12 +914,19 @@ async function applyVerifiedLabel(
     const owner = record.run.issue.owner;
     const repo = record.run.issue.repo;
     const issueNumber = record.run.issue.issueNumber;
+    const labelName = "reprosmith:verified";
+    const labelColor = "8250df";
     try {
-      await githubClient.addLabels(owner, repo, issueNumber, ["reprosmith:verified"]);
+      await githubClient.updateLabel?.(owner, repo, labelName, labelColor, "Issue verified by reproducible evidence");
+    } catch {
+      // The label may not exist yet; addLabels below will take the create path.
+    }
+    try {
+      await githubClient.addLabels(owner, repo, issueNumber, [labelName]);
     } catch (error) {
       if (!githubClient.createLabel) throw error;
-      await githubClient.createLabel(owner, repo, "reprosmith:verified", "111111", "Issue verified by reproducible evidence");
-      await githubClient.addLabels(owner, repo, issueNumber, ["reprosmith:verified"]);
+      await githubClient.createLabel(owner, repo, labelName, labelColor, "Issue verified by reproducible evidence");
+      await githubClient.addLabels(owner, repo, issueNumber, [labelName]);
     }
     return {
       ...record,
@@ -819,6 +937,73 @@ async function applyVerifiedLabel(
       ...record,
       verifiedLabel: { name: "reprosmith:verified", error: "GitHub did not accept the verified label request" }
     };
+  }
+}
+
+async function applyAwaitingApprovalLabel(
+  record: PersistedWebhookRunRecord,
+  githubClient: GitHubRestClientLike | undefined
+): Promise<PersistedWebhookRunRecord> {
+  if (
+    !githubClient ||
+    record.approvalLabel ||
+    record.run.status !== "awaiting-approval" ||
+    !hasGenuineProof(record.trueForge.result)
+  ) {
+    return record;
+  }
+
+  try {
+    const owner = record.run.issue.owner;
+    const repo = record.run.issue.repo;
+    const issueNumber = record.run.issue.issueNumber;
+    const labelName = "reprosmith:awaiting-approval";
+    const labelColor = "d1242f";
+    try {
+      await githubClient.updateLabel?.(owner, repo, labelName, labelColor, "Verified patch is waiting for maintainer approval");
+    } catch {
+      // The label may not exist yet; addLabels below will take the create path.
+    }
+    try {
+      await githubClient.addLabels(owner, repo, issueNumber, [labelName]);
+    } catch (error) {
+      if (!githubClient.createLabel) throw error;
+      await githubClient.createLabel(owner, repo, labelName, labelColor, "Verified patch is waiting for maintainer approval");
+      await githubClient.addLabels(owner, repo, issueNumber, [labelName]);
+    }
+    return {
+      ...record,
+      approvalLabel: { name: labelName, appliedAt: new Date().toISOString() }
+    };
+  } catch {
+    return {
+      ...record,
+      approvalLabel: {
+        name: "reprosmith:awaiting-approval",
+        error: "GitHub did not accept the approval label request"
+      }
+    };
+  }
+}
+
+async function removeAwaitingApprovalLabel(
+  record: PersistedWebhookRunRecord,
+  githubClient: GitHubRestClientLike | undefined
+): Promise<PersistedWebhookRunRecord> {
+  if (!githubClient?.removeLabel || !record.approvalLabel?.appliedAt) {
+    return record;
+  }
+
+  try {
+    await githubClient.removeLabel(
+      record.run.issue.owner,
+      record.run.issue.repo,
+      record.run.issue.issueNumber,
+      "reprosmith:awaiting-approval"
+    );
+    return { ...record, approvalLabel: undefined };
+  } catch {
+    return record;
   }
 }
 
@@ -873,7 +1058,6 @@ async function appendGitHubComment(
 function buildGitHubStatusComment(record: PersistedWebhookRunRecord, kind: GitHubCommentKind): string {
   const status = githubCommentStatus(record);
   const result = record.trueForge.result;
-  const proof = result?.summary ? safeCommentText(result.summary, 1_000) : undefined;
   const pullRequest = result?.pullRequest;
   const comments = record.githubComments ?? [];
   const lines = [
@@ -886,33 +1070,54 @@ function buildGitHubStatusComment(record: PersistedWebhookRunRecord, kind: GitHu
     `**TrueForge:** ${record.trueForge.session?.id ? `session \`${record.trueForge.session.id}\`` : "session pending"}${record.trueForge.turn?.id ? `, turn \`${record.trueForge.turn.id}\`` : ""}`,
     `**Update:** ${commentUpdateLabel(kind)}${comments.length > 0 ? ` (update ${comments.length + 1})` : ""}`,
     "",
-    safeCommentText(status.detail, 1_000)
+    `> ${safeCommentText(status.detail, 1_000)}`
   ];
 
-  if (proof) {
-    lines.push("", `**Agent summary:** ${proof}`);
+  if (result?.summary) {
+    lines.push("", "### Finding", safeCommentText(result.summary, 1_200));
   }
   if (result?.proof) {
     lines.push(
       "",
       "### Evidence",
+      "<details>",
+      "<summary>Expand proof details</summary>",
+      "",
       ...[
-        result.proof.attempts ? `- Attempts: ${safeCommentText(result.proof.attempts, 200)}` : undefined,
-        result.proof.before ? `- Before: ${safeCommentText(result.proof.before, 900)}` : undefined,
-        result.proof.after ? `- After: ${safeCommentText(result.proof.after, 900)}` : undefined,
-        result.proof.regressions ? `- Regression: ${safeCommentText(result.proof.regressions, 900)}` : undefined
-      ].filter((line): line is string => line !== undefined)
+        result.proof.attempts ? `- **Attempts:** ${safeCommentText(result.proof.attempts, 300)}` : undefined,
+        result.proof.before ? `- **Before:** ${safeCommentText(result.proof.before, 1_200)}` : undefined,
+        result.proof.after ? `- **After:** ${safeCommentText(result.proof.after, 1_200)}` : undefined,
+        result.proof.regressions ? `- **Regression suite:** ${safeCommentText(result.proof.regressions, 1_200)}` : undefined
+      ].filter((line): line is string => line !== undefined),
+      "",
+      "</details>"
     );
   }
   if (result?.candidatePatch) {
     lines.push(
       "",
-      "### Remedy",
+      "### Proposed remedy",
       safeCommentText(result.candidatePatch.body, 2_500),
       "",
-      `Files: ${result.candidatePatch.files.map((file) => `\`${safeCommentText(file.path, 240)}\``).join(", ")}`,
-      `Verified label: ${record.verifiedLabel?.appliedAt ? "`reprosmith:verified` added" : record.verifiedLabel?.error ? "could not be added" : "pending"}`
+      "### Candidate patch",
+      `- **Patch hash:** \`${result.candidatePatch.hash}\``,
+      `- **Files:** ${result.candidatePatch.files.length}`,
+      `- **Verification label:** ${record.verifiedLabel?.appliedAt ? "`reprosmith:verified` added" : record.verifiedLabel?.error ? "could not be added" : "pending"}`,
+      `- **Approval label:** ${record.approvalLabel?.appliedAt ? "`reprosmith:awaiting-approval` added" : record.approvalLabel?.error ? "could not be added" : "not applicable"}`,
+      "",
+      formatGitHubPatchFiles(result.candidatePatch.files),
+      ""
     );
+    if (record.run.status === "awaiting-approval") {
+      lines.push(
+        "### Approve this exact patch",
+        "Review the proposed file contents above, then post this as a new issue comment:",
+        "",
+        `\`\`\`text\n/reprosmith approve ${record.run.id} ${result.candidatePatch.hash}\n\`\`\``,
+        "",
+        "Only a repository maintainer can approve. Approval creates a draft pull request; no branch or PR exists before that check passes."
+      );
+    }
   } else if (record.run.status === "failed") {
     lines.push(
       "",
@@ -927,8 +1132,47 @@ function buildGitHubStatusComment(record: PersistedWebhookRunRecord, kind: GitHu
   return lines.join("\n");
 }
 
+function formatGitHubPatchFiles(files: Array<{ path: string; content: string }>): string {
+  const maxFiles = 8;
+  const maxTotalBytes = 40_000;
+  let totalBytes = 0;
+  const fileSections: string[] = [];
+  for (const file of files.slice(0, maxFiles)) {
+    const content = safeCodeText(file.content, 8_000);
+    const sectionBytes = Buffer.byteLength(content, "utf8");
+    if (totalBytes + sectionBytes > maxTotalBytes) break;
+    totalBytes += sectionBytes;
+    fileSections.push(`#### \`${safeCommentText(file.path, 240)}\``, "", "````text", content, "````", "");
+  }
+  const includedFiles = Math.floor(fileSections.length / 6);
+  const sections: string[] = [
+    "<details>",
+    `<summary>View proposed file contents (${includedFiles} of ${files.length})</summary>`,
+    "",
+    ...fileSections
+  ];
+  if (includedFiles < files.length) {
+    sections.push("Additional file contents are available in the permanent dashboard.", "");
+  }
+  sections.push("</details>");
+  return sections.join("\n");
+}
+
 function safeCommentText(value: string, maxBytes: number): string {
   return clampText(redactHarnessText(value), maxBytes);
+}
+
+function safeCodeText(value: string, maxBytes: number): string {
+  return clampText(
+    value
+      .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer [REDACTED]")
+      .replace(/(?:api[_-]?key|token|secret|password)\s*[:=]\s*[^\s,;]+/gi, "[REDACTED]")
+      .replace(/\bsk-[A-Za-z0-9_-]+\b/g, "[REDACTED]")
+      .replace(/\bgh[pousr]_[A-Za-z0-9_]+\b/g, "[REDACTED]")
+      .replace(/`{4,}/g, "```")
+      .trim(),
+    maxBytes
+  );
 }
 
 function commentUpdateLabel(kind: GitHubCommentKind): string {
@@ -1343,7 +1587,10 @@ async function monitorTrueForgeTurn(
       }
     };
     const labeledRecord = result ? await applyVerifiedLabel(completedRecord, githubClient) : completedRecord;
-    const commentedRecord = await appendGitHubComment(labeledRecord, githubClient, result ? "completed" : "failed");
+    const approvalLabeledRecord = result
+      ? await applyAwaitingApprovalLabel(labeledRecord, githubClient)
+      : labeledRecord;
+    const commentedRecord = await appendGitHubComment(approvalLabeledRecord, githubClient, result ? "completed" : "failed");
     await appendUpdatedLiveRecord(dataDir, commentedRecord);
   } catch (error) {
     console.error("TrueForge turn subscription failed", error);

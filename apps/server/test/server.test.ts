@@ -504,21 +504,35 @@ describe("ReproSmith production server", () => {
       expect(latest.githubComments).toHaveLength(2);
       expect(latest.verifiedLabel.name).toBe("reprosmith:verified");
       expect(githubClient.createIssueComment).toHaveBeenCalledTimes(2);
-      expect(githubClient.createIssueComment.mock.calls[1]?.[3]).toContain("### Remedy");
-      expect(githubClient.createIssueComment.mock.calls[1]?.[3]).toContain("Verified label: `reprosmith:verified` added");
+      expect(githubClient.createIssueComment.mock.calls[1]?.[3]).toContain("### Proposed remedy");
+      expect(githubClient.createIssueComment.mock.calls[1]?.[3]).toContain("`reprosmith:verified` added");
+      expect(githubClient.createIssueComment.mock.calls[1]?.[3]).toContain("/reprosmith approve ");
+      expect(githubClient.createIssueComment.mock.calls[1]?.[3]).toContain("src/parser.ts");
       expect(githubClient.updateIssueComment).not.toHaveBeenCalled();
       expect(githubClient.addLabels).toHaveBeenCalledWith("o", "r", 21, ["reprosmith:verified"]);
+      expect(githubClient.addLabels).toHaveBeenCalledWith("o", "r", 21, ["reprosmith:awaiting-approval"]);
       const runRecord = await fetch(`${isolatedBaseUrl}/api/runs/${encodeURIComponent(latest.run.id)}`).then((runResponse) => runResponse.json());
       expect(runRecord.run.id).toBe(latest.run.id);
 
-      const approval = await fetch(`${isolatedBaseUrl}/api/approvals`, {
+      const approvalPayload = JSON.stringify({
+        action: "created",
+        issue: payload ? JSON.parse(payload).issue : undefined,
+        comment: {
+          body: `/reprosmith approve ${latest.run.id} ${latest.trueForge.result.candidatePatch.hash}`,
+          user: { login: "maintainer" },
+          author_association: "OWNER"
+        },
+        repository: JSON.parse(payload).repository
+      });
+      const approval = await fetch(`${isolatedBaseUrl}/api/github/webhook`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: "Bearer approval-token" },
-        body: JSON.stringify({
-          runId: latest.run.id,
-          actionId: "approve-pr",
-          patchHash: latest.trueForge.result.candidatePatch.hash
-        })
+        headers: {
+          "Content-Type": "application/json",
+          "X-GitHub-Event": "issue_comment",
+          "X-GitHub-Delivery": "delivery-approval-21",
+          "X-Hub-Signature-256": signWebhookPayload(approvalPayload, "webhook-secret")
+        },
+        body: approvalPayload
       });
       const approvalBody = await approval.json();
 
@@ -529,14 +543,15 @@ describe("ReproSmith production server", () => {
         name: "create_fix_pull_request",
         approval: expect.objectContaining({ approved: true })
       }));
-      const duplicateApproval = await fetch(`${isolatedBaseUrl}/api/approvals`, {
+      const duplicateApproval = await fetch(`${isolatedBaseUrl}/api/github/webhook`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: "Bearer approval-token" },
-        body: JSON.stringify({
-          runId: latest.run.id,
-          actionId: "approve-pr",
-          patchHash: latest.trueForge.result.candidatePatch.hash
-        })
+        headers: {
+          "Content-Type": "application/json",
+          "X-GitHub-Event": "issue_comment",
+          "X-GitHub-Delivery": "delivery-approval-21-duplicate",
+          "X-Hub-Signature-256": signWebhookPayload(approvalPayload, "webhook-secret")
+        },
+        body: approvalPayload
       });
       expect(duplicateApproval.status).toBe(200);
       expect(githubTools.callTool).toHaveBeenCalledTimes(1);

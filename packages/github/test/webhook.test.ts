@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseIssueWebhook, signWebhookPayload, verifyGitHubWebhook } from "../src/index.js";
+import { parseIssueCommentWebhook, parseIssueWebhook, signWebhookPayload, verifyGitHubWebhook } from "../src/index.js";
 
 describe("GitHub webhook verification", () => {
   it("accepts a matching sha256 signature", () => {
@@ -46,5 +46,31 @@ describe("GitHub webhook verification", () => {
 
     expect(parsed.issue.number).toBe(7);
     expect(parsed.repository.owner.login).toBe("MAYANK-MAHAUR");
+  });
+
+  it("parses issue comment webhook payloads", () => {
+    const parsed = parseIssueCommentWebhook(JSON.stringify({
+      action: "created",
+      issue: {
+        number: 7,
+        title: "Parser crash",
+        body: "Trailing escape breaks tokenizer",
+        html_url: "https://github.com/MAYANK-MAHAUR/Byter/issues/7"
+      },
+      comment: {
+        body: "/reprosmith approve run-id abc",
+        user: { login: "maintainer" },
+        author_association: "OWNER"
+      },
+      repository: {
+        name: "Byter",
+        full_name: "MAYANK-MAHAUR/Byter",
+        default_branch: "main",
+        owner: { login: "MAYANK-MAHAUR" }
+      }
+    }));
+
+    expect(parsed.action).toBe("created");
+    expect(parsed.comment.user?.login).toBe("maintainer");
   });
 });

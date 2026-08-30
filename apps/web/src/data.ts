@@ -65,6 +65,7 @@ export interface HarnessState {
   statusCommentUrl?: string;
   commentHistory: Array<{ id?: number; url: string; kind: "started" | "completed" | "failed" | "approval" | "legacy"; createdAt: string }>;
   verifiedLabel?: { name: string; appliedAt?: string; error?: string };
+  approvalLabel?: { name: string; appliedAt?: string; error?: string };
 }
 
 export interface DashboardRun extends ReproRun {
@@ -77,9 +78,11 @@ export interface DashboardRun extends ReproRun {
   runtime: string;
   model: string;
   currentBranch: string;
+  summary?: string;
   candidatePatch?: {
     title: string;
     files: string[];
+    fileContents?: Array<{ path: string; content: string }>;
     hash: string;
     verifiedAt: string;
     body?: string;
@@ -103,6 +106,7 @@ interface WebhookRunRecord {
   githubStatusComment?: { id?: number; url: string };
   githubComments?: Array<{ id?: number; url: string; kind: "started" | "completed" | "failed" | "approval"; createdAt: string }>;
   verifiedLabel?: { name: "reprosmith:verified"; appliedAt?: string; error?: string };
+  approvalLabel?: { name: "reprosmith:awaiting-approval"; appliedAt?: string; error?: string };
   run: ReproRun;
   scan: SecurityScanResult;
   trueForge?: {
@@ -278,11 +282,13 @@ export function toDashboardRunFromWebhook(record: WebhookRunRecord): DashboardRu
     runtime: trueForgeStatus === "started" || liveResult ? "TrueForge Agent Harness" : "Webhook intake",
     model: record.trueForge?.model ?? (trueForgeStatus === "started" || liveResult ? "Configured by TrueForge" : "Not started"),
     currentBranch: livePatch?.branchName ?? `delivery ${record.deliveryId}`,
+    ...(liveResult?.summary ? { summary: liveResult.summary } : {}),
     ...(livePatch
       ? {
           candidatePatch: {
             title: livePatch.title,
             files: livePatch.files.map((file) => file.path),
+            fileContents: livePatch.files,
             hash: livePatch.hash,
             verifiedAt: livePatch.verifiedAt,
             body: livePatch.body
@@ -305,7 +311,8 @@ export function toDashboardRunFromWebhook(record: WebhookRunRecord): DashboardRu
       dashboardUrl: record.dashboardUrl,
       statusCommentUrl: latestComment?.url,
       commentHistory,
-      verifiedLabel: record.verifiedLabel
+      verifiedLabel: record.verifiedLabel,
+      approvalLabel: record.approvalLabel
     },
     evidence: [
       {

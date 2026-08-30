@@ -44,6 +44,10 @@ export interface GitHubPullRequest {
   html_url: string;
 }
 
+export interface GitHubCollaboratorPermission {
+  permission: string;
+}
+
 export class GitHubRestClient {
   private readonly token: string;
   private readonly apiBaseUrl: string;
@@ -75,6 +79,13 @@ export class GitHubRestClient {
     });
   }
 
+  async removeLabel(owner: string, repo: string, issueNumber: number, label: string): Promise<void> {
+    await this.request(
+      `${repoBasePath(owner, repo)}/issues/${validateIssueNumber(issueNumber)}/labels/${encodeURIComponent(expectNonEmpty(label, "label name"))}`,
+      { method: "DELETE" }
+    );
+  }
+
   async createLabel(owner: string, repo: string, name: string, color: string, description: string): Promise<void> {
     if (!/^[0-9a-f]{6}$/i.test(color)) {
       throw new Error("Invalid GitHub label color");
@@ -88,6 +99,23 @@ export class GitHubRestClient {
         description
       })
     });
+  }
+
+  async updateLabel(owner: string, repo: string, name: string, color: string, description: string): Promise<void> {
+    if (!/^[0-9a-f]{6}$/i.test(color)) {
+      throw new Error("Invalid GitHub label color");
+    }
+
+    await this.request(`${repoBasePath(owner, repo)}/labels/${encodeURIComponent(expectNonEmpty(name, "label name"))}`, {
+      method: "PATCH",
+      body: JSON.stringify({ color, description })
+    });
+  }
+
+  async getCollaboratorPermission(owner: string, repo: string, username: string): Promise<GitHubCollaboratorPermission> {
+    return this.request<GitHubCollaboratorPermission>(
+      `${repoBasePath(owner, repo)}/collaborators/${encodeURIComponent(expectNonEmpty(username, "GitHub username"))}/permission`
+    );
   }
 
   async createIssueComment(
