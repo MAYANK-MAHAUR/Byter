@@ -2,7 +2,7 @@
 
 **CI for bug reports.** Byter turns a GitHub issue into executable proof, a tested candidate fix, and a human-controlled draft pull request.
 
-[Live app](https://byter-production-1024.up.railway.app/) · [Verified run](https://byter-production-1024.up.railway.app/runs/github-MAYANK-MAHAUR-Byter-32-8fd16ca98fd2) · [Source issue](https://github.com/MAYANK-MAHAUR/Byter/issues/32) · [Local setup guide](Local.md) · [Build story](docs/BLOG.md)
+[Live app](https://byter-production-1024.up.railway.app/) · [Verified run](https://byter-production-1024.up.railway.app/runs/github-MAYANK-MAHAUR-Byter-32-8fd16ca98fd2) · [Source issue](https://github.com/MAYANK-MAHAUR/Byter/issues/32) · [Local setup guide](Local.md)
 
 ![Byter showing a live TrueForge investigation](docs/images/byter-live-overview.png)
 
