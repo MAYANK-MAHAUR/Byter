@@ -6,7 +6,7 @@
     "outDir": "dist",
     "rootDir": "src",
     "paths": {
-      "@reprosmith/github": ["../../packages/github/src/index.js"]
+      "@byter/github": ["../../packages/github/src/index.js"]
     }
   },
   "references": [{ "path": "../../packages/github" }],

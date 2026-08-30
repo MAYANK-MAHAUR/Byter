@@ -1,4 +1,4 @@
-# ReproSmith Demo
+# Byter Demo
 
 ## Local Full Check
 
@@ -91,5 +91,5 @@ been created. The latest progress comment on the issue should contain the same
 run URL; earlier progress comments remain available as an append-only history.
 
 Use the issue form in `.github/ISSUE_TEMPLATE/bug.yml` for a repeatable test.
-When `REPROSMITH_REQUIRE_TRIGGER_LABEL=true`, only an issue with the configured
-`reprosmith:run` label or the `/reprosmith run` marker starts a live run.
+When `BYTER_REQUIRE_TRIGGER_LABEL=true`, only an issue with the configured
+`byter:run` label or the `/byter run` marker starts a live run.

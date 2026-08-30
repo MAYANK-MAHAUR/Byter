@@ -4,10 +4,10 @@ import { dirname, join } from "node:path";
 import { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createReproSmithServer } from "../src/server.js";
-import { signWebhookPayload } from "@reprosmith/github";
+import { createByterServer } from "../src/server.js";
+import { signWebhookPayload } from "@byter/github";
 
-describe("ReproSmith production server", () => {
+describe("Byter production server", () => {
   let baseUrl: string;
   let closeServer: () => Promise<void>;
   let dataDir: string;
@@ -17,13 +17,13 @@ describe("ReproSmith production server", () => {
     process.env.APPROVAL_TOKEN = "approval-token";
     delete process.env.TRUEFORGE_URL;
     delete process.env.TRUEFORGE_API_KEY;
-    delete process.env.REPROSMITH_REQUIRE_TRIGGER_LABEL;
-    delete process.env.REPROSMITH_TRIGGER_LABEL;
-    const staticDir = await mkdtemp(join(tmpdir(), "reprosmith-static-"));
-    dataDir = await mkdtemp(join(tmpdir(), "reprosmith-data-"));
-    await writeFile(join(staticDir, "index.html"), "<main>ReproSmith</main>", "utf8");
+    delete process.env.BYTER_REQUIRE_TRIGGER_LABEL;
+    delete process.env.BYTER_TRIGGER_LABEL;
+    const staticDir = await mkdtemp(join(tmpdir(), "byter-static-"));
+    dataDir = await mkdtemp(join(tmpdir(), "byter-data-"));
+    await writeFile(join(staticDir, "index.html"), "<main>Byter</main>", "utf8");
 
-    const server = createReproSmithServer({ staticDir, dataDir });
+    const server = createByterServer({ staticDir, dataDir });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address() as AddressInfo;
     baseUrl = `http://127.0.0.1:${address.port}`;
@@ -35,14 +35,14 @@ describe("ReproSmith production server", () => {
     delete process.env.APPROVAL_TOKEN;
     delete process.env.TRUEFORGE_URL;
     delete process.env.TRUEFORGE_API_KEY;
-    delete process.env.REPROSMITH_REQUIRE_TRIGGER_LABEL;
-    delete process.env.REPROSMITH_TRIGGER_LABEL;
+    delete process.env.BYTER_REQUIRE_TRIGGER_LABEL;
+    delete process.env.BYTER_TRIGGER_LABEL;
     await closeServer();
   });
 
   it("serves health and the built dashboard shell", async () => {
     await expect(fetch(`${baseUrl}/healthz`).then((response) => response.json())).resolves.toEqual({ ok: true });
-    await expect(fetch(baseUrl).then((response) => response.text())).resolves.toContain("ReproSmith");
+    await expect(fetch(baseUrl).then((response) => response.text())).resolves.toContain("Byter");
   });
 
   it("returns live demo data and persists approval receipts", async () => {
@@ -126,13 +126,13 @@ describe("ReproSmith production server", () => {
   });
 
   it("starts on a deliberate label event but ignores later edits with the standing label", async () => {
-    process.env.REPROSMITH_REQUIRE_TRIGGER_LABEL = "true";
+    process.env.BYTER_REQUIRE_TRIGGER_LABEL = "true";
     const issue = {
       number: 18,
       title: "Parser crash",
       body: "Trailing escape crashes the parser.",
       html_url: "https://github.test/o/r/issues/18",
-      labels: [{ name: "reprosmith:run" }]
+      labels: [{ name: "byter:run" }]
     };
     const repository = { name: "r", full_name: "o/r", default_branch: "main", owner: { login: "o" } };
     const sendWebhook = async (action: string, deliveryId: string, labelName?: string) => {
@@ -154,7 +154,7 @@ describe("ReproSmith production server", () => {
       });
     };
 
-    const labeledResponse = await sendWebhook("labeled", "delivery-label-18", "reprosmith:run");
+    const labeledResponse = await sendWebhook("labeled", "delivery-label-18", "byter:run");
     expect(labeledResponse.status).toBe(202);
     expect((await labeledResponse.json()).ignored).not.toBe(true);
 
@@ -162,15 +162,15 @@ describe("ReproSmith production server", () => {
     expect(editedResponse.status).toBe(202);
     expect(await editedResponse.json()).toMatchObject({ ignored: true });
 
-    const lifecycleLabelResponse = await sendWebhook("labeled", "delivery-lifecycle-label-18", "reprosmith:triaging");
+    const lifecycleLabelResponse = await sendWebhook("labeled", "delivery-lifecycle-label-18", "byter:triaging");
     expect(lifecycleLabelResponse.status).toBe(202);
     expect(await lifecycleLabelResponse.json()).toMatchObject({ ignored: true });
   });
 
   it("starts a TrueForge session for safe signed GitHub issue webhooks", async () => {
-    const staticDir = await mkdtemp(join(tmpdir(), "reprosmith-static-"));
-    const liveDataDir = await mkdtemp(join(tmpdir(), "reprosmith-data-"));
-    await writeFile(join(staticDir, "index.html"), "<main>ReproSmith</main>", "utf8");
+    const staticDir = await mkdtemp(join(tmpdir(), "byter-static-"));
+    const liveDataDir = await mkdtemp(join(tmpdir(), "byter-data-"));
+    await writeFile(join(staticDir, "index.html"), "<main>Byter</main>", "utf8");
     const trueForgeRuntime = {
       startSession: vi.fn().mockResolvedValue({
         session: { id: "session-live-1", title: null },
@@ -185,7 +185,7 @@ describe("ReproSmith production server", () => {
       createIssueComment: vi.fn().mockResolvedValue({ id: 701, html_url: "https://github.test/issues/20#issuecomment-701" }),
       addLabels: vi.fn().mockResolvedValue(undefined)
     } as any;
-    const server = createReproSmithServer({ staticDir, dataDir: liveDataDir, trueForgeRuntime, githubClient });
+    const server = createByterServer({ staticDir, dataDir: liveDataDir, trueForgeRuntime, githubClient });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address() as AddressInfo;
     const isolatedBaseUrl = `http://127.0.0.1:${address.port}`;
@@ -240,7 +240,7 @@ describe("ReproSmith production server", () => {
       }
       expect(latest.trueForge.status).toBe("completed");
       expect(latest.run.status).toBe("failed");
-      expect(latest.trueForge.error).toContain("valid reprosmith.result contract");
+      expect(latest.trueForge.error).toContain("valid byter.result contract");
       expect(latest.trueForge.events).toHaveLength(2);
       expect(latest.trueForge.events.map((event: { type: string }) => event.type)).toEqual(["step.started", "step.done"]);
       expect(latest.trueForge.events[0]).toMatchObject({
@@ -254,7 +254,7 @@ describe("ReproSmith production server", () => {
       expect(JSON.stringify(latest)).not.toContain("do-not-persist");
       expect(githubClient.createIssueComment).toHaveBeenCalledTimes(2);
       expect(githubClient.createIssueComment.mock.calls[1]?.[3]).toContain("No genuine proof contract was returned");
-      expect(githubClient.addLabels).toHaveBeenCalledWith("o", "r", 20, ["reprosmith:triaging"]);
+      expect(githubClient.addLabels).toHaveBeenCalledWith("o", "r", 20, ["byter:triaging"]);
       await expect(readFile(join(liveDataDir, "webhook-runs.jsonl"), "utf8")).resolves.toContain("session-live-1");
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
@@ -262,11 +262,11 @@ describe("ReproSmith production server", () => {
   });
 
   it("recovers a missing TrueForge result contract without inventing proof", async () => {
-    const staticDir = await mkdtemp(join(tmpdir(), "reprosmith-static-"));
-    const liveDataDir = await mkdtemp(join(tmpdir(), "reprosmith-data-"));
-    await writeFile(join(staticDir, "index.html"), "<main>ReproSmith</main>", "utf8");
+    const staticDir = await mkdtemp(join(tmpdir(), "byter-static-"));
+    const liveDataDir = await mkdtemp(join(tmpdir(), "byter-data-"));
+    await writeFile(join(staticDir, "index.html"), "<main>Byter</main>", "utf8");
     const recoveryResult = JSON.stringify({
-      kind: "reprosmith.result",
+      kind: "byter.result",
       status: "verified",
       summary: "The reported tokenizer failure was reproduced three times.",
       proof: { before: "3/3 failed", after: "3/3 passed", regressions: "Focused regression passed", attempts: "3/3" },
@@ -287,7 +287,7 @@ describe("ReproSmith production server", () => {
           return [{ sequenceNumber: 1, type: "turn.done", raw: { state: { status: "done" } } }];
         }
         return [
-          { sequenceNumber: 2, type: "model.message", raw: { tool_calls: [{ function: { name: "submit_reprosmith_result", arguments: recoveryResult } }] } },
+          { sequenceNumber: 2, type: "model.message", raw: { tool_calls: [{ function: { name: "submit_byter_result", arguments: recoveryResult } }] } },
           { sequenceNumber: 3, type: "turn.done", raw: { state: { status: "done" } } }
         ];
       })
@@ -296,7 +296,7 @@ describe("ReproSmith production server", () => {
       createIssueComment: vi.fn().mockResolvedValue({ id: 702, html_url: "https://github.test/issues/22#issuecomment-702" }),
       addLabels: vi.fn().mockResolvedValue(undefined)
     } as any;
-    const server = createReproSmithServer({ staticDir, dataDir: liveDataDir, trueForgeRuntime, githubClient });
+    const server = createByterServer({ staticDir, dataDir: liveDataDir, trueForgeRuntime, githubClient });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address() as AddressInfo;
     const isolatedBaseUrl = `http://127.0.0.1:${address.port}`;
@@ -340,18 +340,18 @@ describe("ReproSmith production server", () => {
       expect(latest.run.status).toBe("verified");
       expect(latest.trueForge.error).toBeUndefined();
       expect(latest.trueForge.result.status).toBe("verified");
-      expect(githubClient.addLabels).toHaveBeenCalledWith("o", "r", 22, ["reprosmith:verified"]);
+      expect(githubClient.addLabels).toHaveBeenCalledWith("o", "r", 22, ["byter:verified"]);
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     }
   });
 
   it("refreshes persisted TrueForge events when the stream omits the final output", async () => {
-    const staticDir = await mkdtemp(join(tmpdir(), "reprosmith-static-"));
-    const liveDataDir = await mkdtemp(join(tmpdir(), "reprosmith-data-"));
-    await writeFile(join(staticDir, "index.html"), "<main>ReproSmith</main>", "utf8");
+    const staticDir = await mkdtemp(join(tmpdir(), "byter-static-"));
+    const liveDataDir = await mkdtemp(join(tmpdir(), "byter-data-"));
+    await writeFile(join(staticDir, "index.html"), "<main>Byter</main>", "utf8");
     const recoveryResult = JSON.stringify({
-      kind: "reprosmith.result",
+      kind: "byter.result",
       status: "verified",
       summary: "The persisted terminal output contains the verified proof.",
       proof: { before: "3/3 failed", after: "3/3 passed", regressions: "Focused regression passed", attempts: "3/3" },
@@ -373,7 +373,7 @@ describe("ReproSmith production server", () => {
       createIssueComment: vi.fn().mockResolvedValue({ id: 703, html_url: "https://github.test/issues/23#issuecomment-703" }),
       addLabels: vi.fn().mockResolvedValue(undefined)
     } as any;
-    const server = createReproSmithServer({ staticDir, dataDir: liveDataDir, trueForgeRuntime, githubClient });
+    const server = createByterServer({ staticDir, dataDir: liveDataDir, trueForgeRuntime, githubClient });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address() as AddressInfo;
     const isolatedBaseUrl = `http://127.0.0.1:${address.port}`;
@@ -415,24 +415,24 @@ describe("ReproSmith production server", () => {
       expect(trueForgeRuntime.listSessionEvents).toHaveBeenCalledWith("session-refresh-1");
       expect(latest.run.status).toBe("verified");
       expect(latest.trueForge.result.status).toBe("verified");
-      expect(githubClient.addLabels).toHaveBeenCalledWith("o", "r", 23, ["reprosmith:verified"]);
+      expect(githubClient.addLabels).toHaveBeenCalledWith("o", "r", 23, ["byter:verified"]);
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     }
   });
 
   it("persists live proof, exposes approval, and creates a PR through approved MCP tools", async () => {
-    const staticDir = await mkdtemp(join(tmpdir(), "reprosmith-static-"));
-    const liveDataDir = await mkdtemp(join(tmpdir(), "reprosmith-data-"));
-    await writeFile(join(staticDir, "index.html"), "<main>ReproSmith</main>", "utf8");
+    const staticDir = await mkdtemp(join(tmpdir(), "byter-static-"));
+    const liveDataDir = await mkdtemp(join(tmpdir(), "byter-data-"));
+    await writeFile(join(staticDir, "index.html"), "<main>Byter</main>", "utf8");
     const proofText = JSON.stringify({
-      kind: "reprosmith.result",
+      kind: "byter.result",
       status: "patch-ready",
       summary: "Reproduced 3/3 and passed the regression check.",
       proof: { before: "3/3 failed in /tmp/private/repro.ts with token=fixture-sensitive", after: "3/3 passed", regressions: "passed", attempts: "3/3" },
       candidatePatch: {
         title: "Fix parser crash",
-        body: "Verified by ReproSmith.",
+        body: "Verified by Byter.",
         baseBranch: "main",
         files: [{ path: "src/parser.ts", content: "export const fixed = true;\n" }]
       }
@@ -471,7 +471,7 @@ describe("ReproSmith production server", () => {
       addLabels: vi.fn().mockResolvedValue(undefined),
       updateIssueComment: vi.fn().mockImplementation(async (_owner: string, _repo: string, id: number) => ({ id, html_url: "https://github.test/issues/21#issuecomment-700" }))
     } as any;
-    const server = createReproSmithServer({ staticDir, dataDir: liveDataDir, trueForgeRuntime, githubTools, githubClient });
+    const server = createByterServer({ staticDir, dataDir: liveDataDir, trueForgeRuntime, githubTools, githubClient });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address() as AddressInfo;
     const isolatedBaseUrl = `http://127.0.0.1:${address.port}`;
@@ -516,17 +516,17 @@ describe("ReproSmith production server", () => {
       expect(JSON.stringify(latest)).not.toContain("/tmp/private/repro.ts");
       expect(JSON.stringify(latest)).not.toContain("fixture-sensitive");
       expect(latest.githubComments).toHaveLength(1);
-      expect(latest.verifiedLabel.name).toBe("reprosmith:verified");
+      expect(latest.verifiedLabel.name).toBe("byter:verified");
       expect(githubClient.createIssueComment).toHaveBeenCalledTimes(1);
-      expect(githubClient.createIssueComment.mock.calls[0]?.[3]).toContain("## ReproSmith · Environment building");
+      expect(githubClient.createIssueComment.mock.calls[0]?.[3]).toContain("## Byter · Environment building");
       expect(githubClient.createIssueComment.mock.calls[0]?.[3]).not.toContain("approve");
       expect(githubClient.updateIssueComment).toHaveBeenCalledTimes(1);
       expect(githubClient.updateIssueComment.mock.calls[0]?.[3]).toContain("### Proposed fix");
       expect(githubClient.updateIssueComment.mock.calls[0]?.[3]).toContain("Review evidence & approve patch");
       expect(githubClient.updateIssueComment.mock.calls[0]?.[3]).toContain("src/parser.ts");
       expect(githubClient.updateIssueComment.mock.calls[0]?.[3]).not.toContain("export const fixed = true;");
-      expect(githubClient.addLabels).toHaveBeenCalledWith("o", "r", 21, ["reprosmith:verified"]);
-      expect(githubClient.addLabels).toHaveBeenCalledWith("o", "r", 21, ["reprosmith:awaiting-approval"]);
+      expect(githubClient.addLabels).toHaveBeenCalledWith("o", "r", 21, ["byter:verified"]);
+      expect(githubClient.addLabels).toHaveBeenCalledWith("o", "r", 21, ["byter:awaiting-approval"]);
       const runRecord = await fetch(`${isolatedBaseUrl}/api/runs/${encodeURIComponent(latest.run.id)}`).then((runResponse) => runResponse.json());
       expect(runRecord.run.id).toBe(latest.run.id);
       expect(runRecord.trueForge.session).toBeUndefined();
@@ -649,9 +649,9 @@ describe("ReproSmith production server", () => {
   });
 
   it("requires DATA_DIR before accepting persistent write endpoints", async () => {
-    const staticDir = await mkdtemp(join(tmpdir(), "reprosmith-static-"));
-    await writeFile(join(staticDir, "index.html"), "<main>ReproSmith</main>", "utf8");
-    const server = createReproSmithServer({ staticDir });
+    const staticDir = await mkdtemp(join(tmpdir(), "byter-static-"));
+    await writeFile(join(staticDir, "index.html"), "<main>Byter</main>", "utf8");
+    const server = createByterServer({ staticDir });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address() as AddressInfo;
     const isolatedBaseUrl = `http://127.0.0.1:${address.port}`;
@@ -716,7 +716,7 @@ describe("ReproSmith production server", () => {
     const previousCwd = process.cwd();
     process.chdir(packageDir);
     try {
-      const server = createReproSmithServer();
+      const server = createByterServer();
       await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
       const address = server.address() as AddressInfo;
       const response = await fetch(`http://127.0.0.1:${address.port}`);

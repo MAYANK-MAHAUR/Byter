@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  ReproSmithTrueForgeRuntime,
+  ByterTrueForgeRuntime,
   TrueForgeInitialTurnError,
   buildInitialUserMessage,
   buildProofContractRecoveryMessage,
-  buildReproSmithAgentSpec
+  buildByterAgentSpec
 } from "../src/index.js";
 
 const config = {
@@ -14,22 +14,22 @@ const config = {
   modelProvider: "agentrouter"
 };
 
-describe("ReproSmith TrueForge runtime", () => {
+describe("Byter TrueForge runtime", () => {
   it("sends the CLINE user agent required by the TrueForge deployment", () => {
-    const runtime = new ReproSmithTrueForgeRuntime(config);
+    const runtime = new ByterTrueForgeRuntime(config);
     const client = (runtime as unknown as { client: { _options: { headers: Record<string, string> } } }).client;
 
     expect(client._options.headers["user-agent"]).toBe("CLINE");
   });
 
   it("builds an inline agent spec with sandbox and subagents enabled", () => {
-    const spec = buildReproSmithAgentSpec(config);
+    const spec = buildByterAgentSpec(config);
 
     expect(spec.model.name).toBe("agentrouter/glm-5.3");
     expect(spec.responseFormat).toMatchObject({
       type: "json_schema",
       jsonSchema: {
-        name: "reprosmith_result",
+        name: "byter_result",
         strict: true,
         schema: expect.objectContaining({
           required: expect.arrayContaining(["kind", "status", "summary", "proof"])
@@ -42,7 +42,7 @@ describe("ReproSmith TrueForge runtime", () => {
     expect(spec.config.sandbox.enabled).toBe(true);
     expect(spec.mcpServers).toEqual([
       {
-        name: "reprosmith-github",
+        name: "byter-github",
         preload: true,
         enableTools: ["@read-only"],
         requireApprovalForTools: []
@@ -62,13 +62,13 @@ describe("ReproSmith TrueForge runtime", () => {
     expect(message).toContain("Repository: MAYANK-MAHAUR/Byter");
     expect(message).toContain("Base SHA: abc123");
     expect(message).toContain("Require the same target failure 3/3");
-    expect(buildReproSmithAgentSpec(config).instructions).toContain("node-v22.14.0-linux-x64.tar.gz");
-    expect(buildReproSmithAgentSpec(config).instructions).toContain("submit_reprosmith_result");
-    expect(buildReproSmithAgentSpec(config).instructions).toContain("never paste repository source or test contents into base64 blobs");
-    expect(buildReproSmithAgentSpec(config).instructions).toContain("concise GitHub-flavored Markdown");
-    expect(buildReproSmithAgentSpec(config).instructions).toContain("opening and closing $$ delimiters on their own lines");
-    expect(buildReproSmithAgentSpec(config).instructions).toContain("Do not use raw HTML");
-    expect(buildReproSmithAgentSpec(config).instructions).toContain("immediately run that exact command two more times");
+    expect(buildByterAgentSpec(config).instructions).toContain("node-v22.14.0-linux-x64.tar.gz");
+    expect(buildByterAgentSpec(config).instructions).toContain("submit_byter_result");
+    expect(buildByterAgentSpec(config).instructions).toContain("never paste repository source or test contents into base64 blobs");
+    expect(buildByterAgentSpec(config).instructions).toContain("concise GitHub-flavored Markdown");
+    expect(buildByterAgentSpec(config).instructions).toContain("opening and closing $$ delimiters on their own lines");
+    expect(buildByterAgentSpec(config).instructions).toContain("Do not use raw HTML");
+    expect(buildByterAgentSpec(config).instructions).toContain("immediately run that exact command two more times");
     expect(message).toContain("public-safe GitHub-flavored Markdown");
     expect(message).toContain("repeat the exact command immediately until 3/3 attempts");
   });
@@ -87,7 +87,7 @@ describe("ReproSmith TrueForge runtime", () => {
         listEvents: vi.fn()
       }
     };
-    const runtime = new ReproSmithTrueForgeRuntime(config, client);
+    const runtime = new ByterTrueForgeRuntime(config, client);
 
     const result = await runtime.startSession({
       issueUrl: "https://github.com/MAYANK-MAHAUR/Byter/issues/1",
@@ -123,7 +123,7 @@ describe("ReproSmith TrueForge runtime", () => {
         listEvents: vi.fn()
       }
     };
-    const runtime = new ReproSmithTrueForgeRuntime(config, client);
+    const runtime = new ByterTrueForgeRuntime(config, client);
 
     await expect(runtime.requestProofContract("session_1")).resolves.toEqual({
       id: "turn_recovery",
@@ -136,7 +136,7 @@ describe("ReproSmith TrueForge runtime", () => {
       expect.objectContaining({
         input: [expect.objectContaining({
           type: "user.message",
-          content: expect.stringContaining("valid reprosmith.result object")
+          content: expect.stringContaining("valid byter.result object")
         })]
       })
     );
@@ -152,7 +152,7 @@ describe("ReproSmith TrueForge runtime", () => {
         })
       }
     };
-    const runtime = new ReproSmithTrueForgeRuntime(config, client);
+    const runtime = new ByterTrueForgeRuntime(config, client);
 
     await expect(runtime.listSessionEvents("session_1")).resolves.toEqual([
       { sequenceNumber: 2, type: "sandbox.created", raw: { sequenceNumber: 2, event: { type: "sandbox.created" } } }
@@ -170,7 +170,7 @@ describe("ReproSmith TrueForge runtime", () => {
         })
       }
     };
-    const runtime = new ReproSmithTrueForgeRuntime(config, client);
+    const runtime = new ByterTrueForgeRuntime(config, client);
 
     const events = await runtime.listSessionEvents("session_1");
 
@@ -187,7 +187,7 @@ describe("ReproSmith TrueForge runtime", () => {
         listEvents: vi.fn()
       }
     };
-    const runtime = new ReproSmithTrueForgeRuntime(config, client);
+    const runtime = new ByterTrueForgeRuntime(config, client);
 
     await expect(
       runtime.startSession({
@@ -216,7 +216,7 @@ describe("ReproSmith TrueForge runtime", () => {
         listEvents: vi.fn()
       }
     };
-    const runtime = new ReproSmithTrueForgeRuntime(config, client);
+    const runtime = new ByterTrueForgeRuntime(config, client);
 
     try {
       await runtime.startSession({

@@ -17,7 +17,7 @@ import { verifyReproduction } from "./verifier.js";
 export async function validatePatch(input: PatchValidationInput): Promise<PatchValidationResult> {
   assertPatchDoesNotTouchProtectedPaths(input.patch, input.protectedPaths ?? []);
 
-  const tempWorkspace = await mkdtemp(join(tmpdir(), "reprosmith-patch-"));
+  const tempWorkspace = await mkdtemp(join(tmpdir(), "byter-patch-"));
   try {
     await copyWorkspace(input.workspacePath, tempWorkspace, input.workspaceCopyExcludes ?? [".git"]);
 

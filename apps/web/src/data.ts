@@ -1,5 +1,5 @@
-import type { ReproRun, RunStatus, SecurityScanResult } from "@reprosmith/core";
-import type { DemoRunSummary } from "@reprosmith/demo-runner";
+import type { ReproRun, RunStatus, SecurityScanResult } from "@byter/core";
+import type { DemoRunSummary } from "@byter/demo-runner";
 
 export type EvidenceKind = "stdout" | "stack" | "patch" | "policy";
 export type ApprovalActionId = "approve-pr" | "request-diff" | "reject-run";
@@ -35,7 +35,7 @@ export interface HarnessTraceEvent {
   at: string;
   type: string;
   category: HarnessEventCategory;
-  source: "trueforge" | "reprosmith";
+  source: "trueforge" | "byter";
   status: "info" | "running" | "passed" | "failed";
   summary: string;
   toolName?: string;
@@ -110,8 +110,8 @@ interface WebhookRunRecord {
   dashboardUrl?: string;
   githubStatusComment?: { id?: number; url: string };
   githubComments?: Array<{ id?: number; url: string; kind: "started" | "completed" | "failed" | "approval"; createdAt: string }>;
-  verifiedLabel?: { name: "reprosmith:verified"; appliedAt?: string; error?: string };
-  approvalLabel?: { name: "reprosmith:awaiting-approval"; appliedAt?: string; error?: string };
+  verifiedLabel?: { name: "byter:verified"; appliedAt?: string; error?: string };
+  approvalLabel?: { name: "byter:awaiting-approval"; appliedAt?: string; error?: string };
   run: ReproRun;
   scan: SecurityScanResult;
   trueForge?: {
@@ -146,12 +146,12 @@ interface WebhookRunRecord {
 }
 
 export function apiUrl(path: string): string {
-  const baseUrl = (import.meta.env.VITE_REPROSMITH_API_URL ?? "").trim().replace(/\/+$/, "");
+  const baseUrl = (import.meta.env.VITE_BYTER_API_URL ?? "").trim().replace(/\/+$/, "");
   return `${baseUrl}${path}`;
 }
 
 export async function fetchDashboardRun(fetchImpl: typeof fetch = fetch): Promise<DashboardRun> {
-  if (import.meta.env.VITE_REPROSMITH_DATA_MODE === "demo") {
+  if (import.meta.env.VITE_BYTER_DATA_MODE === "demo") {
     const response = await fetchImpl(apiUrl("/api/demo-run"), { cache: "no-store" });
     if (!response.ok) {
       throw new Error(`Demo run API returned ${response.status}`);
@@ -190,7 +190,7 @@ export function toDashboardRun(summary: DemoRunSummary): DashboardRun {
     sourceLabel: "local proof demo",
     repoLabel: summary.repository.replace("/", " / "),
     issueTitle: summary.issueTitle,
-    assignee: "ReproSmith agent",
+    assignee: "Byter agent",
     runtime: summary.runtime,
     model: summary.model,
     currentBranch: summary.currentBranch,
@@ -607,11 +607,11 @@ function demoTrace(summary: DemoRunSummary): HarnessTraceEvent[] {
       at: at(0),
       type: "mcp.read_issue",
       category: "mcp",
-      source: "reprosmith",
+      source: "byter",
       status: "passed",
       summary: "Fixture read of the GitHub issue",
       toolName: "read_issue",
-      mcpServer: "reprosmith-github",
+      mcpServer: "byter-github",
       target: "issue #17"
     },
     {
@@ -619,11 +619,11 @@ function demoTrace(summary: DemoRunSummary): HarnessTraceEvent[] {
       at: at(2),
       type: "mcp.read_file",
       category: "mcp",
-      source: "reprosmith",
+      source: "byter",
       status: "passed",
       summary: "Fixture read of parser.mjs",
       toolName: "read_file",
-      mcpServer: "reprosmith-github",
+      mcpServer: "byter-github",
       target: "parser.mjs"
     },
     {
@@ -631,7 +631,7 @@ function demoTrace(summary: DemoRunSummary): HarnessTraceEvent[] {
       at: at(4),
       type: "sandbox.created",
       category: "sandbox",
-      source: "reprosmith",
+      source: "byter",
       status: "passed",
       summary: "Fixture sandbox created",
       sandboxId: "demo-local-sandbox"
@@ -641,7 +641,7 @@ function demoTrace(summary: DemoRunSummary): HarnessTraceEvent[] {
       at: at(6),
       type: "sandbox.exec",
       category: "sandbox",
-      source: "reprosmith",
+      source: "byter",
       status: "passed",
       summary: "Fixture reproduction command completed",
       command: "node repro.mjs",
@@ -653,7 +653,7 @@ function demoTrace(summary: DemoRunSummary): HarnessTraceEvent[] {
       at: at(8),
       type: "sandbox.exec",
       category: "sandbox",
-      source: "reprosmith",
+      source: "byter",
       status: "passed",
       summary: "Fixture regression command completed",
       command: "node regression.mjs",
@@ -665,7 +665,7 @@ function demoTrace(summary: DemoRunSummary): HarnessTraceEvent[] {
       at: at(10),
       type: "turn.done",
       category: "session",
-      source: "reprosmith",
+      source: "byter",
       status: "passed",
       summary: "Fixture proof complete"
     }

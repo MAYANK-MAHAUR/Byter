@@ -26,4 +26,4 @@ COPY --from=build /app/demo ./demo
 COPY --from=build /app/packages ./packages
 
 EXPOSE 3000
-CMD ["pnpm", "--filter", "@reprosmith/server", "start"]
+CMD ["pnpm", "--filter", "@byter/server", "start"]

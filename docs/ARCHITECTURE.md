@@ -1,10 +1,10 @@
-# ReproSmith Architecture
+# Byter Architecture
 
 ```text
 GitHub issues webhook
         |
         v
-ReproSmith server
+Byter server
   - HMAC verification and delivery deduplication
   - issue security scan
   - run JSONL persistence
@@ -49,7 +49,7 @@ The authenticated approval API validates the run ID and payload hash before
 calling the `create_fix_pull_request` MCP tool. The resulting branch, commit,
 and draft PR receipt are stored with the run and a new GitHub progress comment
 is added. After complete proof, the server also applies the
-`reprosmith:verified` label through the configured GitHub client.
+`byter:verified` label through the configured GitHub client.
 
 The current implementation uses a server-side approval checkpoint and an
 approved MCP tool call. It does not claim that the initial proof turn itself

@@ -56,7 +56,7 @@ export interface ApprovalContext {
 export type GitHubMcpToolName =
   | "read_issue"
   | "read_file"
-  | "submit_reprosmith_result"
+  | "submit_byter_result"
   | "add_verified_label"
   | "comment_on_issue"
   | "create_fix_pull_request";
@@ -84,12 +84,12 @@ export function listGitHubTools(): Array<{ name: GitHubMcpToolName; description:
     { name: "read_issue", description: "Read a GitHub issue by owner, repo, and number.", requiresApproval: false },
     { name: "read_file", description: "Read a repository file at an optional ref.", requiresApproval: false },
     {
-      name: "submit_reprosmith_result",
-      description: "Submit the final ReproSmith proof contract without mutating GitHub.",
+      name: "submit_byter_result",
+      description: "Submit the final Byter proof contract without mutating GitHub.",
       requiresApproval: false
     },
-    { name: "add_verified_label", description: "Add reprosmith:verified after proof is complete.", requiresApproval: true },
-    { name: "comment_on_issue", description: "Post a ReproSmith evidence comment.", requiresApproval: true },
+    { name: "add_verified_label", description: "Add byter:verified after proof is complete.", requiresApproval: true },
+    { name: "comment_on_issue", description: "Post a Byter evidence comment.", requiresApproval: true },
     {
       name: "create_fix_pull_request",
       description: "Create a fix branch with explicit file contents and open a draft pull request.",
@@ -126,16 +126,16 @@ export function createGitHubMcpTools({ client }: GitHubMcpServerOptions) {
           return textResult(JSON.stringify(file, null, 2));
         }
 
-        case "submit_reprosmith_result": {
-          expectReproSmithResult(call.arguments);
+        case "submit_byter_result": {
+          expectByterResult(call.arguments);
           return textResult(JSON.stringify({ accepted: true }));
         }
 
         case "add_verified_label": {
           assertApproved(call.approval, approvalPayloadHash(call.name, call.arguments));
           const { owner, repo, issueNumber } = parseRepoIssueArgs(call.arguments);
-          await client.addLabels(owner, repo, issueNumber, ["reprosmith:verified"]);
-          return textResult("Added reprosmith:verified label.");
+          await client.addLabels(owner, repo, issueNumber, ["byter:verified"]);
+          return textResult("Added byter:verified label.");
         }
 
         case "comment_on_issue": {
@@ -156,7 +156,7 @@ export function createGitHubMcpTools({ client }: GitHubMcpServerOptions) {
             files: request.files.map((file) => ({ path: file.path, content: file.content }))
           });
           const commit = await client.createCommit(request.owner, request.repo, {
-            message: `ReproSmith fix: ${request.title}`,
+            message: `Byter fix: ${request.title}`,
             tree: tree.sha,
             parents: [base.commit.sha]
           });
@@ -223,7 +223,7 @@ function canonicalWritePayload(name: GitHubMcpWriteToolName, args: Record<string
         tool: name,
         arguments: {
           ...parseRepoIssueArgs(args),
-          labels: ["reprosmith:verified"]
+          labels: ["byter:verified"]
         }
       };
     }
@@ -296,9 +296,9 @@ function parseCreatePullRequestArgs(args: Record<string, unknown>) {
   };
 }
 
-function expectReproSmithResult(args: Record<string, unknown>): void {
-  if (args.kind !== "reprosmith.result") {
-    throw new Error("Expected kind=reprosmith.result");
+function expectByterResult(args: Record<string, unknown>): void {
+  if (args.kind !== "byter.result") {
+    throw new Error("Expected kind=byter.result");
   }
   if (
     args.status !== "patch-ready" &&
@@ -307,7 +307,7 @@ function expectReproSmithResult(args: Record<string, unknown>): void {
     args.status !== "blocked" &&
     args.status !== "failed"
   ) {
-    throw new Error("Expected a valid ReproSmith result status");
+    throw new Error("Expected a valid Byter result status");
   }
   expectString(args.summary, "summary");
   if (!args.proof || typeof args.proof !== "object" || Array.isArray(args.proof)) {

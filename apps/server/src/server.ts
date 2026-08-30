@@ -4,29 +4,29 @@ import { appendFile, mkdir, open, readFile, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ReproSmithTrueForgeRuntime } from "@reprosmith/agent";
+import { ByterTrueForgeRuntime } from "@byter/agent";
 import {
   approvalPayloadHash,
   createGitHubMcpHttpHandler,
   createGitHubMcpTools,
   type GitHubMcpToolResult,
   type GitHubRestClientLike
-} from "@reprosmith/github-mcp";
+} from "@byter/github-mcp";
 import type {
-  StartReproSmithSessionInput,
-  StartReproSmithSessionResult,
+  StartByterSessionInput,
+  StartByterSessionResult,
   TrueForgeTurn,
   TrueForgeRuntimeEventListener,
   TrueForgeRuntimeEvent
-} from "@reprosmith/agent";
-import { canTransition, createRun, scanIssueText, transitionRun } from "@reprosmith/core";
-import { runDemo, type DemoRunSummary } from "@reprosmith/demo-runner";
+} from "@byter/agent";
+import { canTransition, createRun, scanIssueText, transitionRun } from "@byter/core";
+import { runDemo, type DemoRunSummary } from "@byter/demo-runner";
 import {
   GitHubRestClient,
   parseIssueCommentWebhook,
   parseIssueWebhook,
   verifyGitHubWebhook
-} from "@reprosmith/github";
+} from "@byter/github";
 
 type ApprovalActionId = "approve-pr" | "request-diff" | "reject-run";
 type GitHubCommentKind = "started" | "completed" | "failed" | "approval";
@@ -42,10 +42,10 @@ const demoCacheTtlMs = 5_000;
 let demoCache: { createdAt: number; summary: DemoRunSummary } | undefined;
 let demoInFlight: Promise<DemoRunSummary> | undefined;
 
-export interface ReproSmithServerOptions {
+export interface ByterServerOptions {
   staticDir?: string;
   dataDir?: string;
-  trueForgeRuntime?: ReproSmithSessionStarter;
+  trueForgeRuntime?: ByterSessionStarter;
   mcpHandler?: McpRequestHandler;
   githubTools?: GitHubWriteTools;
   githubClient?: GitHubRestClientLike;
@@ -96,7 +96,7 @@ interface HarnessTraceEvent {
   at: string;
   type: string;
   category: HarnessEventCategory;
-  source: "trueforge" | "reprosmith";
+  source: "trueforge" | "byter";
   status: "info" | "running" | "passed" | "failed";
   summary: string;
   toolName?: string;
@@ -111,8 +111,8 @@ interface HarnessTraceEvent {
   artifact?: string;
 }
 
-interface ReproSmithSessionStarter {
-  startSession(input: StartReproSmithSessionInput): Promise<StartReproSmithSessionResult>;
+interface ByterSessionStarter {
+  startSession(input: StartByterSessionInput): Promise<StartByterSessionResult>;
   requestProofContract?(sessionId: string): Promise<TrueForgeTurn>;
   subscribeToTurn?(sessionId: string, turnId: string, onEvent?: TrueForgeRuntimeEventListener): Promise<TrueForgeRuntimeEvent[]>;
   listSessionEvents?(sessionId: string): Promise<TrueForgeRuntimeEvent[]>;
@@ -128,8 +128,8 @@ interface PersistedWebhookRunRecord {
   dashboardUrl?: string;
   githubStatusComment?: { id?: number; url: string };
   githubComments?: Array<{ id?: number; url: string; kind: GitHubCommentKind; createdAt: string }>;
-  verifiedLabel?: { name: "reprosmith:verified"; appliedAt?: string; error?: string };
-  approvalLabel?: { name: "reprosmith:awaiting-approval"; appliedAt?: string; error?: string };
+  verifiedLabel?: { name: "byter:verified"; appliedAt?: string; error?: string };
+  approvalLabel?: { name: "byter:awaiting-approval"; appliedAt?: string; error?: string };
   lifecycleLabels?: Array<{ name: string; appliedAt?: string; error?: string }>;
   run: ReturnType<typeof createRun>;
   scan: ReturnType<typeof scanIssueText>;
@@ -146,7 +146,7 @@ interface PersistedWebhookRunRecord {
   };
 }
 
-export function createReproSmithServer(options: ReproSmithServerOptions = {}): Server {
+export function createByterServer(options: ByterServerOptions = {}): Server {
   const staticDir = resolve(options.staticDir ?? process.env.STATIC_DIR ?? defaultStaticDir());
   const dataDir = options.dataDir ?? process.env.DATA_DIR;
   const trueForgeRuntime = options.trueForgeRuntime ?? trueForgeRuntimeFromEnv();
@@ -221,7 +221,7 @@ async function handleGitHubWebhook(
   request: IncomingMessage,
   response: ServerResponse,
   dataDir: string | undefined,
-  trueForgeRuntime: ReproSmithSessionStarter | undefined,
+  trueForgeRuntime: ByterSessionStarter | undefined,
   githubClient: GitHubRestClientLike | undefined,
   githubTools: GitHubWriteTools | undefined
 ): Promise<void> {
@@ -349,7 +349,7 @@ function parseGitHubApprovalCommand(body: string | null): GitHubApprovalCommand 
   if (body?.trim().toLowerCase() === "approve") {
     return {};
   }
-  const match = body?.trim().match(/^\/reprosmith\s+approve\s+(\S+)\s+([a-f0-9]{64})$/i);
+  const match = body?.trim().match(/^\/byter\s+approve\s+(\S+)\s+([a-f0-9]{64})$/i);
   return match ? { runId: match[1], patchHash: match[2].toLowerCase() } : undefined;
 }
 
@@ -381,7 +381,7 @@ async function handleGitHubIssueCommentWebhook(
 
   const command = parseGitHubApprovalCommand(webhook.comment.body);
   if (!command) {
-    sendJson(response, 202, { ignored: true, reason: "No ReproSmith approval command" });
+    sendJson(response, 202, { ignored: true, reason: "No Byter approval command" });
     return;
   }
 
@@ -441,7 +441,7 @@ async function handleLatestRun(
   request: IncomingMessage,
   response: ServerResponse,
   dataDir: string | undefined,
-  trueForgeRuntime: ReproSmithSessionStarter | undefined
+  trueForgeRuntime: ByterSessionStarter | undefined
 ): Promise<void> {
   if (request.method !== "GET") {
     sendJson(response, 405, { error: "Method not allowed" });
@@ -468,7 +468,7 @@ async function handleRun(
   response: ServerResponse,
   dataDir: string | undefined,
   runId: string,
-  trueForgeRuntime: ReproSmithSessionStarter | undefined
+  trueForgeRuntime: ByterSessionStarter | undefined
 ): Promise<void> {
   if (request.method !== "GET") {
     sendJson(response, 405, { error: "Method not allowed" });
@@ -505,6 +505,7 @@ function publicRunPayload(value: unknown): unknown {
   const result = isRecord(trueForge.result)
     ? {
         ...trueForge.result,
+        ...(typeof trueForge.result.kind === "string" ? { kind: "byter.result" } : {}),
         ...(typeof trueForge.result.summary === "string" ? { summary: safePublicMarkdown(trueForge.result.summary) } : {}),
         ...(typeof trueForge.result.rootCauseSummary === "string" ? { rootCauseSummary: safePublicMarkdown(trueForge.result.rootCauseSummary) } : {}),
         ...(typeof trueForge.result.proposedFixSummary === "string" ? { proposedFixSummary: safePublicMarkdown(trueForge.result.proposedFixSummary) } : {}),
@@ -516,7 +517,15 @@ function publicRunPayload(value: unknown): unknown {
             }
           : {}),
         ...(isRecord(trueForge.result.candidatePatch) && typeof trueForge.result.candidatePatch.body === "string"
-          ? { candidatePatch: { ...trueForge.result.candidatePatch, body: safePublicMarkdown(trueForge.result.candidatePatch.body) } }
+          ? {
+              candidatePatch: {
+                ...trueForge.result.candidatePatch,
+                body: safePublicMarkdown(trueForge.result.candidatePatch.body),
+                ...(typeof trueForge.result.candidatePatch.branchName === "string"
+                  ? { branchName: normalizePublicBranchName(trueForge.result.candidatePatch.branchName) }
+                  : {})
+              }
+            }
           : {})
       }
     : trueForge.result;
@@ -534,6 +543,7 @@ function publicRunPayload(value: unknown): unknown {
           ])
           ),
           id: `event-${index + 1}`,
+          source: publicEvent.source === "trueforge" ? "trueforge" : "byter",
           ...(publicEvent.category === "session" ? { category: "agent" } : {}),
           ...(typeof publicEvent.type === "string"
             ? { type: publicEvent.type.replace(/session/gi, "run").replace(/turn/gi, "step") }
@@ -542,11 +552,27 @@ function publicRunPayload(value: unknown): unknown {
       })
     : trueForge.events;
 
-  return { ...value, run: publicRun, trueForge: { ...trueForge, result, events } };
+  const normalizeLabel = (label: unknown, fallbackName: string) => isRecord(label)
+    ? { ...label, name: fallbackName }
+    : label;
+  const lifecycleLabels = Array.isArray(value.lifecycleLabels)
+    ? value.lifecycleLabels.map((label) => isRecord(label) && typeof label.name === "string"
+      ? { ...label, name: `byter:${label.name.split(":").at(-1)}` }
+      : label)
+    : value.lifecycleLabels;
+
+  return {
+    ...value,
+    run: publicRun,
+    trueForge: { ...trueForge, result, events },
+    verifiedLabel: normalizeLabel(value.verifiedLabel, "byter:verified"),
+    approvalLabel: normalizeLabel(value.approvalLabel, "byter:awaiting-approval"),
+    lifecycleLabels
+  };
 }
 
 function safePublicMarkdown(value: string): string {
-  return value
+  return normalizePublicBrandText(value)
     .replace(/(?:\/tmp|\/workspace|\/home\/[^/\s]+)\/[^\s),;]+/g, "[sandbox path]")
     .replace(/\b[A-Za-z]:\\[^\s),;]+/g, "[local path]")
     .replace(/<[^>\n]*>/g, "")
@@ -555,6 +581,16 @@ function safePublicMarkdown(value: string): string {
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function normalizePublicBrandText(value: string): string {
+  const legacyBrand = new RegExp(["repro", "smith"].join(""), "gi");
+  return value.replace(legacyBrand, "Byter");
+}
+
+function normalizePublicBranchName(value: string): string {
+  const fixPrefix = value.indexOf("/fix-");
+  return fixPrefix >= 0 ? `byter${value.slice(fixPrefix)}` : value;
 }
 
 function ensureDashboardUrl(value: unknown): unknown {
@@ -579,7 +615,7 @@ function decodeRunId(pathname: string): string {
 async function refreshLegacyHarnessTrace(
   dataDir: string | undefined,
   value: unknown,
-  trueForgeRuntime: ReproSmithSessionStarter | undefined
+  trueForgeRuntime: ByterSessionStarter | undefined
 ): Promise<unknown> {
   if (!dataDir || !trueForgeRuntime?.listSessionEvents || !isRecord(value) || !isRecord(value.trueForge)) {
     return value;
@@ -670,7 +706,7 @@ async function startTrueForgeSessionForIssue(
   run: ReturnType<typeof createRun>,
   webhook: ReturnType<typeof parseIssueWebhook>,
   safeToExecute: boolean,
-  trueForgeRuntime: ReproSmithSessionStarter | undefined
+  trueForgeRuntime: ByterSessionStarter | undefined
 ) {
   if (!safeToExecute) {
     return {
@@ -833,7 +869,7 @@ async function executeApproval(
           at: receipt.savedAt,
           type: "approval.received",
           category: "approval",
-          source: "reprosmith",
+          source: "byter",
           status: actionId === "reject-run" ? "failed" : "passed",
           summary: actionId === "reject-run" ? "Maintainer rejected the candidate patch" : "Maintainer requested a diff review",
           artifact: actionId === "reject-run" ? "run stopped" : "write held"
@@ -916,7 +952,7 @@ async function executeApproval(
           at: new Date().toISOString(),
           type: "approval.received",
           category: "approval",
-          source: "reprosmith",
+          source: "byter",
           status: "passed",
           summary: "Maintainer approval received; GitHub write completed",
           toolName: "create_fix_pull_request",
@@ -994,20 +1030,20 @@ async function appendUpdatedLiveRecord(dataDir: string, record: PersistedWebhook
 }
 
 const lifecycleLabelDefinitions = [
-  { name: "reprosmith:triaging", color: "1d5fd1", description: "ReproSmith is triaging this issue" },
-  { name: "reprosmith:needs-info", color: "a85b00", description: "ReproSmith needs more issue information" },
-  { name: "reprosmith:not-reproduced", color: "6e7781", description: "ReproSmith could not reproduce this issue" },
-  { name: "reprosmith:security-review", color: "b42318", description: "ReproSmith held this issue for security review" },
-  { name: "reprosmith:pr-created", color: "1a7f37", description: "ReproSmith created a draft pull request" }
+  { name: "byter:triaging", color: "1d5fd1", description: "Byter is triaging this issue" },
+  { name: "byter:needs-info", color: "a85b00", description: "Byter needs more issue information" },
+  { name: "byter:not-reproduced", color: "6e7781", description: "Byter could not reproduce this issue" },
+  { name: "byter:security-review", color: "b42318", description: "Byter held this issue for security review" },
+  { name: "byter:pr-created", color: "1a7f37", description: "Byter created a draft pull request" }
 ] as const;
 
 function desiredLifecycleLabels(record: PersistedWebhookRunRecord): string[] {
-  if (!record.scan.safeToExecute) return ["reprosmith:security-review"];
-  if (record.run.status === "pr-created") return ["reprosmith:pr-created"];
+  if (!record.scan.safeToExecute) return ["byter:security-review"];
+  if (record.run.status === "pr-created") return ["byter:pr-created"];
   if (record.run.status === "awaiting-approval") return [];
-  if (record.run.status === "needs-info") return ["reprosmith:needs-info"];
-  if (record.run.status === "not-reproduced") return ["reprosmith:not-reproduced"];
-  if (record.run.status === "triaging" || record.trueForge.status === "started") return ["reprosmith:triaging"];
+  if (record.run.status === "needs-info") return ["byter:needs-info"];
+  if (record.run.status === "not-reproduced") return ["byter:not-reproduced"];
+  if (record.run.status === "triaging" || record.trueForge.status === "started") return ["byter:triaging"];
   return [];
 }
 
@@ -1065,7 +1101,7 @@ async function applyVerifiedLabel(
     const owner = record.run.issue.owner;
     const repo = record.run.issue.repo;
     const issueNumber = record.run.issue.issueNumber;
-    const labelName = "reprosmith:verified";
+    const labelName = "byter:verified";
     const labelColor = "8250df";
     try {
       await githubClient.updateLabel?.(owner, repo, labelName, labelColor, "Issue verified by reproducible evidence");
@@ -1082,12 +1118,12 @@ async function applyVerifiedLabel(
     await githubClient.updateLabel?.(owner, repo, labelName, labelColor, "Issue verified by reproducible evidence");
     return {
       ...record,
-      verifiedLabel: { name: "reprosmith:verified", appliedAt: new Date().toISOString() }
+      verifiedLabel: { name: "byter:verified", appliedAt: new Date().toISOString() }
     };
   } catch {
     return {
       ...record,
-      verifiedLabel: { name: "reprosmith:verified", error: "GitHub did not accept the verified label request" }
+      verifiedLabel: { name: "byter:verified", error: "GitHub did not accept the verified label request" }
     };
   }
 }
@@ -1109,7 +1145,7 @@ async function applyAwaitingApprovalLabel(
     const owner = record.run.issue.owner;
     const repo = record.run.issue.repo;
     const issueNumber = record.run.issue.issueNumber;
-    const labelName = "reprosmith:awaiting-approval";
+    const labelName = "byter:awaiting-approval";
     const labelColor = "d1242f";
     try {
       await githubClient.updateLabel?.(owner, repo, labelName, labelColor, "Verified patch is waiting for maintainer approval");
@@ -1132,7 +1168,7 @@ async function applyAwaitingApprovalLabel(
     return {
       ...record,
       approvalLabel: {
-        name: "reprosmith:awaiting-approval",
+        name: "byter:awaiting-approval",
         error: "GitHub did not accept the approval label request"
       }
     };
@@ -1152,7 +1188,7 @@ async function removeAwaitingApprovalLabel(
       record.run.issue.owner,
       record.run.issue.repo,
       record.run.issue.issueNumber,
-      "reprosmith:awaiting-approval"
+      "byter:awaiting-approval"
     );
     return { ...record, approvalLabel: undefined };
   } catch {
@@ -1238,19 +1274,19 @@ export function buildGitHubStatusComment(record: PersistedWebhookRunRecord, kind
   const reviewUrl = record.dashboardUrl ? `${record.dashboardUrl.replace(/\/$/, "")}/review` : "#";
   const runUrl = record.dashboardUrl ?? "#";
   const lines = [
-    `<!-- reprosmith-run:${record.run.id} -->`,
-    `## ReproSmith · ${status.label}`,
+    `<!-- byter-run:${record.run.id} -->`,
+    `## Byter · ${status.label}`,
     "",
     `Issue #${record.run.issue.issueNumber}: ${safeCommentText(record.issueTitle, 240)}`,
     `**Status:** ${status.detail}`,
     "",
-    `[Open ReproSmith run →](${record.dashboardUrl ?? "#"})`
+    `[Open Byter run →](${record.dashboardUrl ?? "#"})`
   ];
 
   if (!record.scan.safeToExecute || record.run.status === "security-review") {
     lines.push(
       "",
-      "ReproSmith detected potentially unsafe reproduction instructions and held execution.",
+      "Byter detected potentially unsafe reproduction instructions and held execution.",
       "",
       "**Execution:** Blocked",
       "**GitHub writes:** None",
@@ -1260,7 +1296,7 @@ export function buildGitHubStatusComment(record: PersistedWebhookRunRecord, kind
   } else if (record.run.status === "needs-info") {
     lines.push(
       "",
-      "ReproSmith could not build a reliable reproduction from the current report.",
+      "Byter could not build a reliable reproduction from the current report.",
       "",
       "**Next step:** Add the missing runtime, input, or expected-output details and trigger a new run.",
       "",
@@ -1269,7 +1305,7 @@ export function buildGitHubStatusComment(record: PersistedWebhookRunRecord, kind
   } else if (record.run.status === "not-reproduced") {
     lines.push(
       "",
-      "ReproSmith built the reported environment but did not observe the claimed failure.",
+      "Byter built the reported environment but did not observe the claimed failure.",
       "",
       `**Reproduction attempts:** ${safeCommentText(result?.proof?.attempts ?? "No matching failure observed", 180)}`,
       "",
@@ -1315,7 +1351,7 @@ export function buildGitHubStatusComment(record: PersistedWebhookRunRecord, kind
       "### Finding",
       safeCommentMarkdown(result.rootCauseSummary ?? summarizeCommentText(result.summary), 360),
       "",
-      "No candidate patch was returned, so ReproSmith did not request repository write approval.",
+      "No candidate patch was returned, so Byter did not request repository write approval.",
       `**[View verification evidence →](${runUrl})**`
     );
   } else if (record.run.status === "failed") {
@@ -1418,7 +1454,7 @@ function githubCommentStatus(record: PersistedWebhookRunRecord): { label: string
     return { label: "Fix proposed", detail: "Approved patch validated; draft pull request created." };
   }
   if (record.run.status === "needs-info") {
-    return { label: "Needs information", detail: "The issue needs more detail before ReproSmith can reproduce it." };
+    return { label: "Needs information", detail: "The issue needs more detail before Byter can reproduce it." };
   }
   if (record.run.status === "not-reproduced") {
     return { label: "Not reproduced", detail: "The reported failure was not observed in the investigated environment." };
@@ -1444,7 +1480,7 @@ function githubCommentStatus(record: PersistedWebhookRunRecord): { label: string
     }
     return { label: "Investigating", detail: "TrueForge is inspecting the issue and collecting executable evidence." };
   }
-  return { label: "Investigation queued", detail: "ReproSmith accepted the signed issue and is preparing the investigation." };
+  return { label: "Investigation queued", detail: "Byter accepted the signed issue and is preparing the investigation." };
 }
 
 async function findPersistedRunById(dataDir: string | undefined, runId: string): Promise<PersistedWebhookRunRecord | undefined> {
@@ -1739,7 +1775,7 @@ function receivedAtTimestamp(value: unknown): number {
 async function monitorTrueForgeTurn(
   dataDir: string,
   record: PersistedWebhookRunRecord,
-  trueForgeRuntime: ReproSmithSessionStarter,
+  trueForgeRuntime: ByterSessionStarter,
   githubClient: GitHubRestClientLike | undefined
 ): Promise<void> {
   if (!record.trueForge.session?.id || !record.trueForge.turn?.id || !trueForgeRuntime.subscribeToTurn) {
@@ -1852,7 +1888,7 @@ async function monitorTrueForgeTurn(
     if (completed && result) {
       run = applyLiveProofResult(run, result);
     } else if (completed && canTransition(run.status, "failed")) {
-      run = transitionRun(run, "failed", "TrueForge completed without a valid reprosmith.result contract");
+      run = transitionRun(run, "failed", "TrueForge completed without a valid byter.result contract");
     }
     const completedRecord: PersistedWebhookRunRecord = {
       ...liveRecord,
@@ -1863,7 +1899,7 @@ async function monitorTrueForgeTurn(
         ...(completed
           ? result
             ? { error: undefined }
-            : { error: "TrueForge completed without a valid reprosmith.result contract" }
+            : { error: "TrueForge completed without a valid byter.result contract" }
           : { error: "TrueForge turn is still running; completion has not been observed" }),
         events: eventMetadata,
         ...(result ? { result } : {})
@@ -1932,7 +1968,7 @@ function projectTrueForgeEvent(event: TrueForgeRuntimeEvent, fallbackIndex = 0):
         ...(typeof args.issueNumber === "number" ? { target: `issue #${args.issueNumber}` } : {}),
         ...(typeof args.command === "string" ? { command: redactHarnessText(args.command) } : {}),
         ...(typeof args.sandboxId === "string" ? { sandboxId: args.sandboxId } : {}),
-        ...(category === "mcp" ? { mcpServer: "reprosmith-github" } : {}),
+        ...(category === "mcp" ? { mcpServer: "byter-github" } : {}),
         ...(category === "subagent" ? { subagent: typeof args.name === "string" ? args.name : name } : {})
       }];
     });
@@ -2009,7 +2045,7 @@ function mergeHarnessEvents(existing: HarnessTraceEvent[], incoming: HarnessTrac
 
 function categoryForTool(name: string): HarnessEventCategory {
   if (name === "exec" || name === "shell" || name === "run_command") return "sandbox";
-  if (name === "read_issue" || name === "read_file" || name === "submit_reprosmith_result" || name === "add_verified_label" || name === "comment_on_issue") return "mcp";
+  if (name === "read_issue" || name === "read_file" || name === "submit_byter_result" || name === "add_verified_label" || name === "comment_on_issue") return "mcp";
   if (name === "create_fix_pull_request") return "github";
   if (name.includes("subagent") || name.includes("delegate") || name === "task") return "subagent";
   return "agent";
@@ -2019,7 +2055,7 @@ function summaryForTool(name: string, args: Record<string, unknown>): string {
   if (name === "exec" || name === "shell" || name === "run_command") return "Running a command in the Daytona sandbox";
   if (name === "read_file") return `Reading ${typeof args.path === "string" ? redactHarnessText(args.path) : "a repository file"} through GitHub MCP`;
   if (name === "read_issue") return `Reading ${typeof args.issueNumber === "number" ? `issue #${args.issueNumber}` : "the GitHub issue"} through GitHub MCP`;
-  if (name === "submit_reprosmith_result") return "Submitting the ReproSmith proof contract";
+  if (name === "submit_byter_result") return "Submitting the Byter proof contract";
   if (name === "create_fix_pull_request") return "Preparing the approved GitHub pull request write";
   if (categoryForTool(name) === "subagent") return `Delegating ${typeof args.name === "string" ? args.name : "a focused task"}`;
   return `Calling ${name}`;
@@ -2123,7 +2159,7 @@ function extractLiveProofResult(events: TrueForgeRuntimeEvent[], record: Persist
       outputCount: outputTexts.length,
       outputLengths: outputTexts.map((output) => output.length),
       joinedLength: joinedOutput.length,
-      hasResultMarker: joinedOutput.includes("reprosmith.result"),
+      hasResultMarker: joinedOutput.includes("byter.result"),
       hasCandidatePatch: joinedOutput.includes("candidatePatch"),
       hasKnownStatus: /\"status\"\s*:\s*\"(?:patch-ready|verified|not-reproduced|blocked|failed)\"/.test(joinedOutput),
       hasJsonObject: joinedOutput.includes("{")
@@ -2283,7 +2319,7 @@ function normalizeCandidatePatch(value: unknown, record: PersistedWebhookRunReco
   }
 
   const baseBranch = record.baseBranch;
-  const branchName = `reprosmith/fix-${record.run.issue.issueNumber}-${createHash("sha256")
+  const branchName = `byter/fix-${record.run.issue.issueNumber}-${createHash("sha256")
     .update(record.deliveryId)
     .digest("hex")
     .slice(0, 10)}`;
@@ -2363,7 +2399,7 @@ function contentText(value: unknown): string {
     if ("output" in value) return contentText(value.output);
     if ("delta" in value) return contentText(value.delta);
     if (isRecord(value.function) && typeof value.function.arguments === "string") return value.function.arguments;
-    if (value.kind === "reprosmith.result" || isRecord(value.candidatePatch) || isCandidatePatchObject(value)) {
+    if (value.kind === "byter.result" || isRecord(value.candidatePatch) || isCandidatePatchObject(value)) {
       return JSON.stringify(value);
     }
     return "";
@@ -2390,7 +2426,7 @@ function parseResultJson(text: string): Record<string, unknown> | undefined {
     try {
       const parsed = JSON.parse(candidate.trim()) as unknown;
       if (!isRecord(parsed)) continue;
-      if (isReproSmithResultContract(parsed)) return parsed;
+      if (isByterResultContract(parsed)) return parsed;
     } catch {
       // Try the next bounded candidate.
     }
@@ -2433,10 +2469,10 @@ function isCandidatePatchObject(value: Record<string, unknown>): boolean {
   return typeof value.title === "string" && typeof value.body === "string" && Array.isArray(value.files);
 }
 
-function isReproSmithResultContract(value: Record<string, unknown>): boolean {
+function isByterResultContract(value: Record<string, unknown>): boolean {
   const proof = isRecord(value.proof) ? value.proof : undefined;
   if (
-    value.kind !== "reprosmith.result" ||
+    value.kind !== "byter.result" ||
     !parseLiveResultStatus(value.status) ||
     typeof value.summary !== "string" ||
     !proof ||
@@ -2484,11 +2520,11 @@ function dashboardUrlFor(runId: string): string {
 }
 
 function requiresExplicitTrigger(): boolean {
-  return process.env.REPROSMITH_REQUIRE_TRIGGER_LABEL === "true";
+  return process.env.BYTER_REQUIRE_TRIGGER_LABEL === "true";
 }
 
 function triggerLabel(): string {
-  return process.env.REPROSMITH_TRIGGER_LABEL?.trim() || "reprosmith:run";
+  return process.env.BYTER_TRIGGER_LABEL?.trim() || "byter:run";
 }
 
 function hasTriggerLabel(webhook: ReturnType<typeof parseIssueWebhook>): boolean {
@@ -2499,7 +2535,7 @@ function hasTriggerLabel(webhook: ReturnType<typeof parseIssueWebhook>): boolean
 }
 
 function hasExplicitTrigger(webhook: ReturnType<typeof parseIssueWebhook>): boolean {
-  if (/(^|\n)\/reprosmith\s+run(?:\s|$)/i.test(webhook.issue.body ?? "")) {
+  if (/(^|\n)\/byter\s+run(?:\s|$)/i.test(webhook.issue.body ?? "")) {
     return true;
   }
   return (webhook.action === "opened" || webhook.action === "labeled") && hasTriggerLabel(webhook);
@@ -2578,19 +2614,19 @@ function githubMcpHandlerFromEnv(githubClient: GitHubRestClientLike | undefined)
   });
 }
 
-function trueForgeRuntimeFromEnv(): ReproSmithSessionStarter | undefined {
+function trueForgeRuntimeFromEnv(): ByterSessionStarter | undefined {
   const baseUrl = process.env.TRUEFORGE_URL;
   const token = process.env.TRUEFORGE_API_KEY;
   if (!baseUrl || !token) {
     return undefined;
   }
 
-  return new ReproSmithTrueForgeRuntime({
+  return new ByterTrueForgeRuntime({
     baseUrl,
     token,
     modelName: process.env.MODEL_NAME ?? "glm-5.3",
     modelProvider: process.env.MODEL_PROVIDER ?? "agentrouter",
-    mcpServerName: process.env.TRUEFORGE_MCP_SERVER_NAME ?? "reprosmith-github"
+    mcpServerName: process.env.TRUEFORGE_MCP_SERVER_NAME ?? "byter-github"
   });
 }
 

@@ -58,7 +58,7 @@ describe("GitHub webhook verification", () => {
         html_url: "https://github.com/MAYANK-MAHAUR/Byter/issues/7"
       },
       comment: {
-        body: "/reprosmith approve run-id abc",
+        body: "/byter approve run-id abc",
         user: { login: "maintainer" },
         author_association: "OWNER"
       },

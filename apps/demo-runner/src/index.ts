@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createRun, scanIssueText, transitionRun, type ReproRun, type SecurityScanResult } from "@reprosmith/core";
-import { validatePatch, type PatchValidationResult } from "@reprosmith/repro-engine";
+import { createRun, scanIssueText, transitionRun, type ReproRun, type SecurityScanResult } from "@byter/core";
+import { validatePatch, type PatchValidationResult } from "@byter/repro-engine";
 
 export interface DemoCandidatePatch {
   title: string;
@@ -165,7 +165,7 @@ export async function runDemo(): Promise<DemoRunSummary> {
 }
 
 async function createCrashWorkspace(): Promise<string> {
-  const workspacePath = await mkdtemp(join(tmpdir(), "reprosmith-demo-"));
+  const workspacePath = await mkdtemp(join(tmpdir(), "byter-demo-"));
   await writeFile(
     join(workspacePath, "parser.mjs"),
     parserSourceLines.join("\n"),

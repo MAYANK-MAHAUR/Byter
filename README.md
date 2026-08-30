@@ -1,10 +1,10 @@
-# ReproSmith
+# Byter
 
-CI for bug reports. ReproSmith makes an AI agent prove a reported bug with executable evidence before it can claim the bug is real or write back to GitHub.
+CI for bug reports. Byter makes an AI agent prove a reported bug with executable evidence before it can claim the bug is real or write back to GitHub.
 
 ## What It Does
 
-ReproSmith is a TrueForge-oriented bug reproduction harness for GitHub issues. It turns an issue report into a controlled run:
+Byter is a TrueForge-oriented bug reproduction harness for GitHub issues. It turns an issue report into a controlled run:
 
 1. Receive and scan the issue text for unsafe instructions.
 2. Read repository context through a narrow GitHub MCP boundary.
@@ -22,7 +22,7 @@ The hackathon vertical slice includes a live TrueForge path and a separate
 deterministic fixture mode:
 
 - pnpm monorepo with shared TypeScript types and project references
-- deterministic ReproSmith state machine
+- deterministic Byter state machine
 - GitHub App auth, webhook verification, REST client, and MCP-style tools
 - signed GitHub issues webhook endpoint in the production server
 - TrueForge runtime adapter with sandbox and dynamic subagent configuration
@@ -63,14 +63,14 @@ awaiting-approval
 
 TrueForge is the agent harness around the model. AgentRouter is the model
 gateway, GitHub MCP is the repository boundary, and Daytona is the disposable
-execution environment. ReproSmith owns the signed webhook, security scan,
+execution environment. Byter owns the signed webhook, security scan,
 approval checkpoint, run record, and dashboard.
 
 ```text
 GitHub issue
     |
     v
-ReproSmith server -- signed intake + security scan -- GitHub progress comments
+Byter server -- signed intake + security scan -- GitHub progress comments
     |
     v
 TrueForge session / turn -- AgentRouter model
@@ -88,7 +88,7 @@ does not expose private chain-of-thought. Live webhook data is labeled as a
 persisted run; `/api/demo-run` and the fixture trace are labeled as demo data.
 
 ## Dashboard
-Use the two-terminal setup below to run the dashboard against the real ReproSmith server.
+Use the two-terminal setup below to run the dashboard against the real Byter server.
 
 Open the Vite URL printed by the command, usually http://127.0.0.1:5173.
 
@@ -96,7 +96,7 @@ The dashboard is a console for the same proof path: TrueForge session identity,
 agent activity, MCP calls, Daytona commands, timeline, reproduction evidence,
 candidate patch, security findings, GitHub progress comments, verified label, and approval state.
 It runs in live mode by default, so it reads persisted webhook runs and sends
-approval actions to the ReproSmith server. A URL such as
+approval actions to the Byter server. A URL such as
 `/runs/github-MAYANK-MAHAUR-Byter-22` reconnects to that specific persisted run.
 
 For a production-style local run, start the server and dashboard in separate terminals:
@@ -107,15 +107,15 @@ pnpm build
 $env:PORT="8787"
 $env:DATA_DIR=".data-local"
 $env:APPROVAL_TOKEN="local-approval"
-pnpm --filter @reprosmith/server start
+pnpm --filter @byter/server start
 ~~~
 
 ~~~powershell
-$env:REPROSMITH_API_TARGET="http://127.0.0.1:8787"
+$env:BYTER_API_TARGET="http://127.0.0.1:8787"
 pnpm dev
 ~~~
 
-The Vite server proxies /api and /mcp to the real backend. Set VITE_REPROSMITH_API_URL when the web console is hosted separately from the API. To intentionally preview generated proof data, set VITE_REPROSMITH_DATA_MODE=demo; demo mode is opt-in and still calls the server's /api/demo-run endpoint.
+The Vite server proxies /api and /mcp to the real backend. Set VITE_BYTER_API_URL when the web console is hosted separately from the API. To intentionally preview generated proof data, set VITE_BYTER_DATA_MODE=demo; demo mode is opt-in and still calls the server's /api/demo-run endpoint.
 
 ## Environment
 
@@ -132,13 +132,13 @@ Key variables:
 - `MODEL_PROVIDER`, `MODEL_NAME`, `MODEL_BASE_URL`, `MODEL_API_KEY`
 - `TRUEFORGE_URL`, `TRUEFORGE_API_KEY`
 - `DAYTONA_API_KEY`
-- REPROSMITH_API_TARGET for the local Vite proxy
-- VITE_REPROSMITH_API_URL and VITE_REPROSMITH_DATA_MODE for the web console
+- BYTER_API_TARGET for the local Vite proxy
+- VITE_BYTER_API_URL and VITE_BYTER_DATA_MODE for the web console
 - APPROVAL_TOKEN, MCP_AUTH_TOKEN, MCP_PUBLIC_URL
 - `APP_BASE_URL` for permanent GitHub progress-comment links
-- `REPROSMITH_REQUIRE_TRIGGER_LABEL` and `REPROSMITH_TRIGGER_LABEL` for explicit issue triggering
+- `BYTER_REQUIRE_TRIGGER_LABEL` and `BYTER_TRIGGER_LABEL` for explicit issue triggering
 - `GITHUB_TOKEN` for the authenticated remote MCP transport
-- GitHub access requires `Issues: Read and write` for progress comments and the `reprosmith:verified` label; `Contents` and `Pull requests` write access is only used after maintainer approval for a draft PR
+- GitHub access requires `Issues: Read and write` for progress comments and the `byter:verified` label; `Contents` and `Pull requests` write access is only used after maintainer approval for a draft PR
 - `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY`, and `GITHUB_INSTALLATION_ID` are reserved for GitHub App token exchange
 - `DATA_DIR` for server-side JSONL receipt/run persistence
 
@@ -160,7 +160,7 @@ packages/repro-engine Reproduction, fingerprinting, minimization, patch proof
 
 ## Safety Model
 
-ReproSmith treats issue text as untrusted input. The scanner blocks credential exfiltration and destructive shell requests, records prompt-injection attempts, and the runtime instructions require a human approval checkpoint before GitHub mutations. Patch validation copies work into a temporary workspace and rejects changes to protected reproducer files. Harness output is bounded and redacted before persistence. Progress comments are operational run receipts; the verified label is added only after complete proof, while branches, commits, and pull requests remain approval-gated.
+Byter treats issue text as untrusted input. The scanner blocks credential exfiltration and destructive shell requests, records prompt-injection attempts, and the runtime instructions require a human approval checkpoint before GitHub mutations. Patch validation copies work into a temporary workspace and rejects changes to protected reproducer files. Harness output is bounded and redacted before persistence. Progress comments are operational run receipts; the verified label is added only after complete proof, while branches, commits, and pull requests remain approval-gated.
 
 ## Live Evidence
 
@@ -186,4 +186,4 @@ pnpm dev
 Built as a fresh hackathon implementation for the TrueForge Agent Harness Hackathon.
 
 
-To connect TrueForge to the live GitHub tools, configure its `reprosmith-github` MCP server with the Railway `${MCP_PUBLIC_URL}/mcp` URL and a header auth value of `Authorization: Bearer <MCP_AUTH_TOKEN>`. The TrueForge agent spec requires write-tool approval before the remote transport invokes a mutation. ReproSmith's server owns the final approval checkpoint and records the resulting GitHub MCP receipt in the run trace.
+To connect TrueForge to the live GitHub tools, configure its `byter-github` MCP server with the Railway `${MCP_PUBLIC_URL}/mcp` URL and a header auth value of `Authorization: Bearer <MCP_AUTH_TOKEN>`. The TrueForge agent spec requires write-tool approval before the remote transport invokes a mutation. Byter's server owns the final approval checkpoint and records the resulting GitHub MCP receipt in the run trace.

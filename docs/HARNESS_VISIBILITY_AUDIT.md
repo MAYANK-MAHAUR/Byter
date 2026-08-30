@@ -4,7 +4,7 @@ Date: 2026-08-29
 Repository: `MAYANK-MAHAUR/Byter`
 Branch: `feat/harness-visibility`
 
-This audit covers the current Byter/ReproSmith implementation only. It does not
+This audit covers the current Byter implementation only. It does not
 infer behavior from any deleted repository. The production observations below
 come from the Railway deployment and the real test issue `#22`.
 
@@ -63,7 +63,7 @@ but they must be labeled as demo or test data in the product and documentation.
 - A clear approval-paused state with the pre-approval GitHub state, plus explicit post-approval branch, commit, and PR evidence.
 - Genuine TrueForge approval resume semantics, or an explicitly documented boundary if the server remains the approval executor.
 - A visible Why Verified summary, reproduction evidence, candidate patch evidence, and security findings surface.
-- A repository issue form/template and an explicit `reprosmith:run` trigger path that can prevent accidental resource use.
+- A repository issue form/template and an explicit `byter:run` trigger path that can prevent accidental resource use.
 - Product documentation covering architecture, setup, live-vs-demo boundaries, and the approval flow.
 - Browser verification of the live route during an active run, browser refresh/reconnect, and the no-branch/no-PR pre-approval state.
 

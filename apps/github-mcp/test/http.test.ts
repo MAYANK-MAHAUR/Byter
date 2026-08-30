@@ -86,8 +86,8 @@ describe("GitHub MCP HTTP transport", () => {
       4
     );
 
-    expect(client.addLabels).toHaveBeenCalledWith("o", "r", 17, ["reprosmith:verified"]);
-    expect(result.result.content[0].text).toContain("Added reprosmith:verified label.");
+    expect(client.addLabels).toHaveBeenCalledWith("o", "r", 17, ["byter:verified"]);
+    expect(result.result.content[0].text).toContain("Added byter:verified label.");
   });
 
   it("can expose a read-only tool surface for autonomous agents", async () => {
@@ -117,7 +117,7 @@ describe("GitHub MCP HTTP transport", () => {
           annotations: { readOnlyHint: true, destructiveHint: false }
         }),
         expect.objectContaining({
-          name: "submit_reprosmith_result",
+          name: "submit_byter_result",
           annotations: { readOnlyHint: true, destructiveHint: false }
         })
       ]);

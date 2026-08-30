@@ -2,11 +2,11 @@ import { TrueForge } from "@truefoundry/trueforge-sdk";
 import {
   buildInitialUserMessage,
   buildProofContractRecoveryMessage,
-  buildReproSmithAgentSpec
-} from "./reprosmith-agent.js";
+  buildByterAgentSpec
+} from "./byter-agent.js";
 import type {
-  StartReproSmithSessionInput,
-  StartReproSmithSessionResult,
+  StartByterSessionInput,
+  StartByterSessionResult,
   TrueForgeClientLike,
   TrueForgePartialSessionFailureDetails,
   TrueForgeRuntimeConfig,
@@ -26,7 +26,7 @@ export class TrueForgeInitialTurnError extends Error {
   }
 }
 
-export class ReproSmithTrueForgeRuntime {
+export class ByterTrueForgeRuntime {
   private readonly client: TrueForgeClientLike;
   private readonly config: TrueForgeRuntimeConfig;
 
@@ -43,11 +43,11 @@ export class ReproSmithTrueForgeRuntime {
       }) as unknown as TrueForgeClientLike);
   }
 
-  async startSession(input: StartReproSmithSessionInput): Promise<StartReproSmithSessionResult> {
+  async startSession(input: StartByterSessionInput): Promise<StartByterSessionResult> {
     const session = normalizeSession(
       await this.client.sessions.create({
         agent: {
-          spec: buildReproSmithAgentSpec(this.config)
+          spec: buildByterAgentSpec(this.config)
         }
       })
     );

@@ -1,5 +1,5 @@
 import { runDemo } from "./index.js";
-import type { RunEvent } from "@reprosmith/core";
+import type { RunEvent } from "@byter/core";
 
 const summary = await runDemo();
 

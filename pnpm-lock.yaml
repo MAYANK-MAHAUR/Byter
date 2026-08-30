@@ -20,10 +20,10 @@ importers:
 
   apps/demo-runner:
     dependencies:
-      '@reprosmith/core':
+      '@byter/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@reprosmith/repro-engine':
+      '@byter/repro-engine':
         specifier: workspace:*
         version: link:../../packages/repro-engine
     devDependencies:
@@ -45,19 +45,19 @@ importers:
 
   apps/server:
     dependencies:
-      '@reprosmith/agent':
+      '@byter/agent':
         specifier: workspace:*
         version: link:../../packages/agent
-      '@reprosmith/core':
+      '@byter/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@reprosmith/demo-runner':
+      '@byter/demo-runner':
         specifier: workspace:*
         version: link:../demo-runner
-      '@reprosmith/github':
+      '@byter/github':
         specifier: workspace:*
         version: link:../../packages/github
-      '@reprosmith/github-mcp':
+      '@byter/github-mcp':
         specifier: workspace:*
         version: link:../github-mcp
     devDependencies:
@@ -73,10 +73,10 @@ importers:
 
   apps/web:
     dependencies:
-      '@reprosmith/core':
+      '@byter/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@reprosmith/demo-runner':
+      '@byter/demo-runner':
         specifier: workspace:*
         version: link:../demo-runner
       katex:
@@ -134,7 +134,7 @@ importers:
 
   packages/agent:
     dependencies:
-      '@reprosmith/core':
+      '@byter/core':
         specifier: workspace:*
         version: link:../core
       '@truefoundry/trueforge-sdk':

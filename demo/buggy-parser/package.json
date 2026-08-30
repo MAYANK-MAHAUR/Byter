@@ -1,5 +1,5 @@
 {
-  "name": "@reprosmith/buggy-parser",
+  "name": "@byter/buggy-parser",
   "version": "0.1.0",
   "private": true,
   "type": "module",

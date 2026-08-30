@@ -8,7 +8,7 @@ const issue = {
   url: "https://github.com/MAYANK-MAHAUR/Byter/issues/1"
 };
 
-describe("ReproSmith state machine", () => {
+describe("Byter state machine", () => {
   it("records a received issue and valid next event", () => {
     const run = createRun("run_1", issue, new Date("2026-08-27T10:00:00.000Z"));
     const next = transitionRun(run, "security-review", "Scanning issue text");
@@ -22,7 +22,7 @@ describe("ReproSmith state machine", () => {
     const run = createRun("run_1", issue);
 
     expect(() => transitionRun(run, "verified", "Trust me")).toThrow(
-      "Invalid ReproSmith transition: received -> verified"
+      "Invalid Byter transition: received -> verified"
     );
   });
 
@@ -41,7 +41,7 @@ describe("ReproSmith state machine", () => {
     const failed = transitionRun(createRun("run_1", issue), "failed", "Unexpected worker failure");
 
     expect(() => transitionRun(failed, "triaging", "Try again")).toThrow(
-      "Invalid ReproSmith transition: failed -> triaging"
+      "Invalid Byter transition: failed -> triaging"
     );
   });
 });
