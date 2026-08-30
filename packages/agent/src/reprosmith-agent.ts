@@ -56,7 +56,7 @@ const reproSmithResultSchema = {
           ]
         }
       },
-      required: ["kind", "status", "summary", "rootCauseSummary", "proposedFixSummary", "proof", "candidatePatch"]
+      required: ["kind", "status", "summary", "proof", "candidatePatch"]
     }
   }
 };
