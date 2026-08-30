@@ -68,7 +68,8 @@ Configure the GitHub App webhook URL:
 https://<railway-domain>/api/github/webhook
 ```
 
-Subscribe to GitHub `issues` events.
+Subscribe to GitHub `issues` and `issue_comment` events. The second event is
+required for maintainer approvals from the issue page.
 
 After setting `TRUEFORGE_URL` and `TRUEFORGE_API_KEY`, send one signed test issue delivery to `/api/github/webhook` and confirm the JSON response includes:
 
@@ -87,7 +88,19 @@ The server creates append-only progress comments on the source issue when the
 run starts, completes, fails, or receives a maintainer decision. Each comment
 links to the permanent run route and never includes credentials, raw provider
 events, or private model reasoning. After complete proof, the server also adds
-the `reprosmith:verified` label using the configured GitHub write token.
+the purple `reprosmith:verified` label and the red
+`reprosmith:awaiting-approval` label using the configured GitHub write token.
+The completion comment includes the proposed remedy, bounded file contents,
+the patch hash, and an approval command. A repository maintainer can approve
+that exact patch by posting this as a new issue comment:
+
+```text
+/reprosmith approve <run-id> <patch-hash>
+```
+
+The server verifies the signed webhook, maintainer permission, run ID, and
+patch hash before creating a draft pull request. No branch or pull request is
+created before that approval succeeds.
 
 For a separately hosted web build, set VITE_REPROSMITH_API_URL=https://<railway-domain> at build time. For local Vite development, set REPROSMITH_API_TARGET=http://127.0.0.1:8787 and run the production server on port 8787; the Vite server proxies API and MCP requests to it.
 
