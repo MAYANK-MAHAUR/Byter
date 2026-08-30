@@ -1,5 +1,5 @@
 {
-  "name": "@reprosmith/demo-runner",
+  "name": "@byter/demo-runner",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -19,8 +19,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@reprosmith/core": "workspace:*",
-    "@reprosmith/repro-engine": "workspace:*"
+    "@byter/core": "workspace:*",
+    "@byter/repro-engine": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.5.4",

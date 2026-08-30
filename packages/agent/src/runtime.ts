@@ -1,12 +1,17 @@
 import { TrueForge } from "@truefoundry/trueforge-sdk";
-import { buildInitialUserMessage, buildReproSmithAgentSpec } from "./reprosmith-agent.js";
+import {
+  buildInitialUserMessage,
+  buildProofContractRecoveryMessage,
+  buildByterAgentSpec
+} from "./byter-agent.js";
 import type {
-  StartReproSmithSessionInput,
-  StartReproSmithSessionResult,
+  StartByterSessionInput,
+  StartByterSessionResult,
   TrueForgeClientLike,
   TrueForgePartialSessionFailureDetails,
   TrueForgeRuntimeConfig,
   TrueForgeRuntimeEvent,
+  TrueForgeRuntimeEventListener,
   TrueForgeSession,
   TrueForgeTurn
 } from "./types.js";
@@ -21,7 +26,7 @@ export class TrueForgeInitialTurnError extends Error {
   }
 }
 
-export class ReproSmithTrueForgeRuntime {
+export class ByterTrueForgeRuntime {
   private readonly client: TrueForgeClientLike;
   private readonly config: TrueForgeRuntimeConfig;
 
@@ -31,15 +36,18 @@ export class ReproSmithTrueForgeRuntime {
       client ??
       (new TrueForge({
         baseUrl: config.baseUrl,
-        ...(config.token ? { token: config.token } : {})
+        ...(config.token ? { token: config.token } : {}),
+        headers: {
+          "User-Agent": "CLINE"
+        }
       }) as unknown as TrueForgeClientLike);
   }
 
-  async startSession(input: StartReproSmithSessionInput): Promise<StartReproSmithSessionResult> {
+  async startSession(input: StartByterSessionInput): Promise<StartByterSessionResult> {
     const session = normalizeSession(
       await this.client.sessions.create({
         agent: {
-          spec: buildReproSmithAgentSpec(this.config)
+          spec: buildByterAgentSpec(this.config)
         }
       })
     );
@@ -69,7 +77,24 @@ export class ReproSmithTrueForgeRuntime {
     return data.map(normalizeEvent);
   }
 
-  async subscribeToTurn(sessionId: string, turnId: string): Promise<TrueForgeRuntimeEvent[]> {
+  async requestProofContract(sessionId: string): Promise<TrueForgeTurn> {
+    return normalizeTurn(
+      await this.client.sessions.createTurn(sessionId, {
+        input: [
+          {
+            type: "user.message",
+            content: buildProofContractRecoveryMessage()
+          }
+        ]
+      })
+    );
+  }
+
+  async subscribeToTurn(
+    sessionId: string,
+    turnId: string,
+    onEvent?: TrueForgeRuntimeEventListener
+  ): Promise<TrueForgeRuntimeEvent[]> {
     if (!this.client.sessions.subscribeToTurn) {
       throw new Error("TrueForge SDK does not expose turn subscription");
     }
@@ -77,7 +102,9 @@ export class ReproSmithTrueForgeRuntime {
     const stream = await this.client.sessions.subscribeToTurn(sessionId, turnId);
     const events: TrueForgeRuntimeEvent[] = [];
     for await (const event of stream) {
-      events.push(normalizeEvent(event));
+      const normalized = normalizeEvent(event);
+      events.push(normalized);
+      await onEvent?.(normalized);
     }
 
     return events;
@@ -151,8 +178,48 @@ function normalizeEvent(value: unknown): TrueForgeRuntimeEvent {
   return {
     ...(sequenceNumber !== undefined ? { sequenceNumber } : {}),
     type,
-    raw: value
+    raw: compactEventPayload(value)
   };
+}
+
+function compactEventPayload(value: unknown): unknown {
+  const budget = { remaining: 512 * 1024 };
+  return compactValue(value, budget, 0);
+}
+
+function compactValue(value: unknown, budget: { remaining: number }, depth: number): unknown {
+  if (value === null || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const limit = Math.min(value.length, Math.max(0, budget.remaining));
+    const compacted = value.slice(0, limit);
+    budget.remaining -= compacted.length;
+    return compacted;
+  }
+  if (depth >= 8 || budget.remaining <= 0) {
+    return undefined;
+  }
+  if (Array.isArray(value)) {
+    const compacted: unknown[] = [];
+    for (const item of value.slice(0, 256)) {
+      const next = compactValue(item, budget, depth + 1);
+      if (next !== undefined) compacted.push(next);
+      if (budget.remaining <= 0) break;
+    }
+    return compacted;
+  }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const compacted: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value).slice(0, 128)) {
+    const next = compactValue(item, budget, depth + 1);
+    if (next !== undefined) compacted[key] = next;
+    if (budget.remaining <= 0) break;
+  }
+  return compacted;
 }
 
 function turnStatus(state: unknown): string {

@@ -1,5 +1,5 @@
 {
-  "name": "@reprosmith/server",
+  "name": "@byter/server",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -19,11 +19,11 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@reprosmith/agent": "workspace:*",
-    "@reprosmith/core": "workspace:*",
-    "@reprosmith/github": "workspace:*",
-    "@reprosmith/demo-runner": "workspace:*",
-    "@reprosmith/github-mcp": "workspace:*"
+    "@byter/agent": "workspace:*",
+    "@byter/core": "workspace:*",
+    "@byter/github": "workspace:*",
+    "@byter/demo-runner": "workspace:*",
+    "@byter/github-mcp": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

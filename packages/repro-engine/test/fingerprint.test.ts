@@ -33,12 +33,12 @@ describe("failure fingerprints", () => {
       timedOut: false,
       durationMs: 1,
       stdout: "",
-      stderr: "TypeError: Cannot read properties of undefined\n    at parse (file:///tmp/reprosmith/parser.js:3:11)"
+      stderr: "TypeError: Cannot read properties of undefined\n    at parse (file:///tmp/byter/parser.js:3:11)"
     });
 
     expect(fingerprint).toMatchObject({
       errorType: "TypeError",
-      file: "/tmp/reprosmith/parser.js",
+      file: "/tmp/byter/parser.js",
       line: 3,
       column: 11,
       stackFrame: "parse"

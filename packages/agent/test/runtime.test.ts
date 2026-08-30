@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  ReproSmithTrueForgeRuntime,
+  ByterTrueForgeRuntime,
   TrueForgeInitialTurnError,
   buildInitialUserMessage,
-  buildReproSmithAgentSpec
+  buildProofContractRecoveryMessage,
+  buildByterAgentSpec
 } from "../src/index.js";
 
 const config = {
@@ -13,18 +14,38 @@ const config = {
   modelProvider: "agentrouter"
 };
 
-describe("ReproSmith TrueForge runtime", () => {
+describe("Byter TrueForge runtime", () => {
+  it("sends the CLINE user agent required by the TrueForge deployment", () => {
+    const runtime = new ByterTrueForgeRuntime(config);
+    const client = (runtime as unknown as { client: { _options: { headers: Record<string, string> } } }).client;
+
+    expect(client._options.headers["user-agent"]).toBe("CLINE");
+  });
+
   it("builds an inline agent spec with sandbox and subagents enabled", () => {
-    const spec = buildReproSmithAgentSpec(config);
+    const spec = buildByterAgentSpec(config);
 
     expect(spec.model.name).toBe("agentrouter/glm-5.3");
+    expect(spec.responseFormat).toMatchObject({
+      type: "json_schema",
+      jsonSchema: {
+        name: "byter_result",
+        strict: true,
+        schema: expect.objectContaining({
+          required: expect.arrayContaining(["kind", "status", "summary", "proof"])
+        })
+      }
+    });
+    expect(spec.config.askUserQuestions.enabled).toBe(false);
+    expect(spec.config.generativeUi.enabled).toBe(false);
+    expect(spec.config.dynamicSubAgents.enabled).toBe(false);
     expect(spec.config.sandbox.enabled).toBe(true);
-    expect(spec.config.dynamicSubAgents.enabled).toBe(true);
     expect(spec.mcpServers).toEqual([
       {
-        name: "reprosmith-github",
+        name: "byter-github",
         preload: true,
-        requireApprovalForTools: ["@write", "@destructive"]
+        enableTools: ["@read-only"],
+        requireApprovalForTools: []
       }
     ]);
   });
@@ -41,6 +62,15 @@ describe("ReproSmith TrueForge runtime", () => {
     expect(message).toContain("Repository: MAYANK-MAHAUR/Byter");
     expect(message).toContain("Base SHA: abc123");
     expect(message).toContain("Require the same target failure 3/3");
+    expect(buildByterAgentSpec(config).instructions).toContain("node-v22.14.0-linux-x64.tar.gz");
+    expect(buildByterAgentSpec(config).instructions).toContain("submit_byter_result");
+    expect(buildByterAgentSpec(config).instructions).toContain("never paste repository source or test contents into base64 blobs");
+    expect(buildByterAgentSpec(config).instructions).toContain("concise GitHub-flavored Markdown");
+    expect(buildByterAgentSpec(config).instructions).toContain("opening and closing $$ delimiters on their own lines");
+    expect(buildByterAgentSpec(config).instructions).toContain("Do not use raw HTML");
+    expect(buildByterAgentSpec(config).instructions).toContain("immediately run that exact command two more times");
+    expect(message).toContain("public-safe GitHub-flavored Markdown");
+    expect(message).toContain("repeat the exact command immediately until 3/3 attempts");
   });
 
   it("creates a session and first turn through the TrueForge SDK shape", async () => {
@@ -57,7 +87,7 @@ describe("ReproSmith TrueForge runtime", () => {
         listEvents: vi.fn()
       }
     };
-    const runtime = new ReproSmithTrueForgeRuntime(config, client);
+    const runtime = new ByterTrueForgeRuntime(config, client);
 
     const result = await runtime.startSession({
       issueUrl: "https://github.com/MAYANK-MAHAUR/Byter/issues/1",
@@ -79,6 +109,39 @@ describe("ReproSmith TrueForge runtime", () => {
     );
   });
 
+  it("requests a bounded proof contract recovery turn", async () => {
+    const client = {
+      sessions: {
+        create: vi.fn(),
+        createTurn: vi.fn().mockResolvedValue({
+          data: {
+            id: "turn_recovery",
+            sessionId: "session_1",
+            state: { status: "running" }
+          }
+        }),
+        listEvents: vi.fn()
+      }
+    };
+    const runtime = new ByterTrueForgeRuntime(config, client);
+
+    await expect(runtime.requestProofContract("session_1")).resolves.toEqual({
+      id: "turn_recovery",
+      sessionId: "session_1",
+      status: "running"
+    });
+    expect(buildProofContractRecoveryMessage()).toContain("Do not call tools");
+    expect(client.sessions.createTurn).toHaveBeenCalledWith(
+      "session_1",
+      expect.objectContaining({
+        input: [expect.objectContaining({
+          type: "user.message",
+          content: expect.stringContaining("valid byter.result object")
+        })]
+      })
+    );
+  });
+
   it("normalizes stored session events", async () => {
     const client = {
       sessions: {
@@ -89,11 +152,30 @@ describe("ReproSmith TrueForge runtime", () => {
         })
       }
     };
-    const runtime = new ReproSmithTrueForgeRuntime(config, client);
+    const runtime = new ByterTrueForgeRuntime(config, client);
 
     await expect(runtime.listSessionEvents("session_1")).resolves.toEqual([
       { sequenceNumber: 2, type: "sandbox.created", raw: { sequenceNumber: 2, event: { type: "sandbox.created" } } }
     ]);
+  });
+
+  it("bounds oversized TrueForge event payloads before returning them", async () => {
+    const oversizedOutput = "x".repeat(2 * 1024 * 1024);
+    const client = {
+      sessions: {
+        create: vi.fn(),
+        createTurn: vi.fn(),
+        listEvents: vi.fn().mockResolvedValue({
+          data: [{ sequenceNumber: 2, event: { type: "model.message", content: oversizedOutput } }]
+        })
+      }
+    };
+    const runtime = new ByterTrueForgeRuntime(config, client);
+
+    const events = await runtime.listSessionEvents("session_1");
+
+    expect(JSON.stringify(events).length).toBeLessThan(600_000);
+    expect(events[0].type).toBe("model.message");
   });
 
   it("deletes the created session if initial turn creation fails", async () => {
@@ -105,7 +187,7 @@ describe("ReproSmith TrueForge runtime", () => {
         listEvents: vi.fn()
       }
     };
-    const runtime = new ReproSmithTrueForgeRuntime(config, client);
+    const runtime = new ByterTrueForgeRuntime(config, client);
 
     await expect(
       runtime.startSession({
@@ -134,7 +216,7 @@ describe("ReproSmith TrueForge runtime", () => {
         listEvents: vi.fn()
       }
     };
-    const runtime = new ReproSmithTrueForgeRuntime(config, client);
+    const runtime = new ByterTrueForgeRuntime(config, client);
 
     try {
       await runtime.startSession({

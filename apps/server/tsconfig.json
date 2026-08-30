@@ -6,11 +6,11 @@
     "outDir": "dist",
     "rootDir": "src",
     "paths": {
-      "@reprosmith/agent": ["../../packages/agent/src/index.ts"],
-      "@reprosmith/core": ["../../packages/core/src/index.js"],
-      "@reprosmith/github-mcp": ["../github-mcp/src/index.ts"],
-      "@reprosmith/github": ["../../packages/github/src/index.js"],
-      "@reprosmith/demo-runner": ["../../apps/demo-runner/src/index.ts"]
+      "@byter/agent": ["../../packages/agent/src/index.ts"],
+      "@byter/core": ["../../packages/core/src/index.js"],
+      "@byter/github-mcp": ["../github-mcp/src/index.ts"],
+      "@byter/github": ["../../packages/github/src/index.js"],
+      "@byter/demo-runner": ["../../apps/demo-runner/src/index.ts"]
     }
   },
   "references": [

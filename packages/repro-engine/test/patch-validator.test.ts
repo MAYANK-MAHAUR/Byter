@@ -7,7 +7,7 @@ import { assertPatchDoesNotTouchProtectedPaths, validatePatch } from "../src/ind
 let workspacePath: string;
 
 beforeEach(async () => {
-  workspacePath = await mkdtemp(join(tmpdir(), "reprosmith-validator-test-"));
+  workspacePath = await mkdtemp(join(tmpdir(), "byter-validator-test-"));
   await writeFile(
     join(workspacePath, "parser.js"),
     [
@@ -111,7 +111,7 @@ describe("patch validator", () => {
   });
 
   it("rejects patch targets that traverse copied symlinks", async () => {
-    const outsidePath = join(tmpdir(), `reprosmith-outside-${Date.now()}.txt`);
+    const outsidePath = join(tmpdir(), `byter-outside-${Date.now()}.txt`);
     await writeFile(outsidePath, "secret", "utf8");
     try {
       await symlink(outsidePath, join(workspacePath, "linked.txt"));

@@ -8,12 +8,14 @@ export interface WebhookVerificationInput {
 
 export interface GitHubIssuePayload {
   action: string;
+  label?: { name?: string };
   issue: {
     number: number;
     title: string;
     body: string | null;
     html_url: string;
     user?: { login: string };
+    labels?: Array<string | { name?: string }>;
   };
   repository: {
     name: string;
@@ -22,6 +24,18 @@ export interface GitHubIssuePayload {
     owner: { login: string };
   };
   installation?: { id: number };
+}
+
+export interface GitHubIssueCommentPayload {
+  action: string;
+  issue: GitHubIssuePayload["issue"];
+  repository: GitHubIssuePayload["repository"];
+  comment: {
+    body: string | null;
+    html_url?: string;
+    user?: { login: string };
+    author_association?: string;
+  };
 }
 
 export function signWebhookPayload(payload: string | Buffer, secret: string): string {
@@ -49,6 +63,16 @@ export function parseIssueWebhook(payload: string): GitHubIssuePayload {
 
   if (!parsed.issue || !parsed.repository || typeof parsed.action !== "string") {
     throw new Error("Payload is not a GitHub issues webhook");
+  }
+
+  return parsed;
+}
+
+export function parseIssueCommentWebhook(payload: string): GitHubIssueCommentPayload {
+  const parsed = JSON.parse(payload) as GitHubIssueCommentPayload;
+
+  if (!parsed.issue || !parsed.repository || !parsed.comment || typeof parsed.action !== "string") {
+    throw new Error("Payload is not a GitHub issue comment webhook");
   }
 
   return parsed;

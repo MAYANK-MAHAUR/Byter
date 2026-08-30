@@ -4,10 +4,10 @@ import { dirname, join } from "node:path";
 import { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createReproSmithServer } from "../src/server.js";
-import { signWebhookPayload } from "@reprosmith/github";
+import { createByterServer } from "../src/server.js";
+import { signWebhookPayload } from "@byter/github";
 
-describe("ReproSmith production server", () => {
+describe("Byter production server", () => {
   let baseUrl: string;
   let closeServer: () => Promise<void>;
   let dataDir: string;
@@ -17,11 +17,13 @@ describe("ReproSmith production server", () => {
     process.env.APPROVAL_TOKEN = "approval-token";
     delete process.env.TRUEFORGE_URL;
     delete process.env.TRUEFORGE_API_KEY;
-    const staticDir = await mkdtemp(join(tmpdir(), "reprosmith-static-"));
-    dataDir = await mkdtemp(join(tmpdir(), "reprosmith-data-"));
-    await writeFile(join(staticDir, "index.html"), "<main>ReproSmith</main>", "utf8");
+    delete process.env.BYTER_REQUIRE_TRIGGER_LABEL;
+    delete process.env.BYTER_TRIGGER_LABEL;
+    const staticDir = await mkdtemp(join(tmpdir(), "byter-static-"));
+    dataDir = await mkdtemp(join(tmpdir(), "byter-data-"));
+    await writeFile(join(staticDir, "index.html"), "<main>Byter</main>", "utf8");
 
-    const server = createReproSmithServer({ staticDir, dataDir });
+    const server = createByterServer({ staticDir, dataDir });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address() as AddressInfo;
     baseUrl = `http://127.0.0.1:${address.port}`;
@@ -33,12 +35,14 @@ describe("ReproSmith production server", () => {
     delete process.env.APPROVAL_TOKEN;
     delete process.env.TRUEFORGE_URL;
     delete process.env.TRUEFORGE_API_KEY;
+    delete process.env.BYTER_REQUIRE_TRIGGER_LABEL;
+    delete process.env.BYTER_TRIGGER_LABEL;
     await closeServer();
   });
 
   it("serves health and the built dashboard shell", async () => {
     await expect(fetch(`${baseUrl}/healthz`).then((response) => response.json())).resolves.toEqual({ ok: true });
-    await expect(fetch(baseUrl).then((response) => response.text())).resolves.toContain("ReproSmith");
+    await expect(fetch(baseUrl).then((response) => response.text())).resolves.toContain("Byter");
   });
 
   it("returns live demo data and persists approval receipts", async () => {
@@ -88,7 +92,7 @@ describe("ReproSmith production server", () => {
       issue: {
         number: 17,
         title: "Parser crash",
-        body: "Trailing escape crashes the parser.",
+        body: `Trailing escape crashes the parser. <!-- ${["repro", "smith"].join("")}-audit -->`,
         html_url: "https://github.test/o/r/issues/17"
       },
       repository: {
@@ -121,10 +125,52 @@ describe("ReproSmith production server", () => {
     expect(latest.run.id).toBe(body.run.id);
   });
 
+  it("starts on a deliberate label event but ignores later edits with the standing label", async () => {
+    process.env.BYTER_REQUIRE_TRIGGER_LABEL = "true";
+    const issue = {
+      number: 18,
+      title: "Parser crash",
+      body: "Trailing escape crashes the parser.",
+      html_url: "https://github.test/o/r/issues/18",
+      labels: [{ name: "byter:run" }]
+    };
+    const repository = { name: "r", full_name: "o/r", default_branch: "main", owner: { login: "o" } };
+    const sendWebhook = async (action: string, deliveryId: string, labelName?: string) => {
+      const payload = JSON.stringify({
+        action,
+        ...(labelName ? { label: { name: labelName } } : {}),
+        issue,
+        repository
+      });
+      return fetch(`${baseUrl}/api/github/webhook`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-GitHub-Event": "issues",
+          "X-GitHub-Delivery": deliveryId,
+          "X-Hub-Signature-256": signWebhookPayload(payload, "webhook-secret")
+        },
+        body: payload
+      });
+    };
+
+    const labeledResponse = await sendWebhook("labeled", "delivery-label-18", "byter:run");
+    expect(labeledResponse.status).toBe(202);
+    expect((await labeledResponse.json()).ignored).not.toBe(true);
+
+    const editedResponse = await sendWebhook("edited", "delivery-edit-18");
+    expect(editedResponse.status).toBe(202);
+    expect(await editedResponse.json()).toMatchObject({ ignored: true });
+
+    const lifecycleLabelResponse = await sendWebhook("labeled", "delivery-lifecycle-label-18", "byter:triaging");
+    expect(lifecycleLabelResponse.status).toBe(202);
+    expect(await lifecycleLabelResponse.json()).toMatchObject({ ignored: true });
+  });
+
   it("starts a TrueForge session for safe signed GitHub issue webhooks", async () => {
-    const staticDir = await mkdtemp(join(tmpdir(), "reprosmith-static-"));
-    const liveDataDir = await mkdtemp(join(tmpdir(), "reprosmith-data-"));
-    await writeFile(join(staticDir, "index.html"), "<main>ReproSmith</main>", "utf8");
+    const staticDir = await mkdtemp(join(tmpdir(), "byter-static-"));
+    const liveDataDir = await mkdtemp(join(tmpdir(), "byter-data-"));
+    await writeFile(join(staticDir, "index.html"), "<main>Byter</main>", "utf8");
     const trueForgeRuntime = {
       startSession: vi.fn().mockResolvedValue({
         session: { id: "session-live-1", title: null },
@@ -135,7 +181,11 @@ describe("ReproSmith production server", () => {
         { sequenceNumber: 2, type: "turn.done", raw: { output: "proof ready" } }
       ])
     };
-    const server = createReproSmithServer({ staticDir, dataDir: liveDataDir, trueForgeRuntime });
+    const githubClient = {
+      createIssueComment: vi.fn().mockResolvedValue({ id: 701, html_url: "https://github.test/issues/20#issuecomment-701" }),
+      addLabels: vi.fn().mockResolvedValue(undefined)
+    } as any;
+    const server = createByterServer({ staticDir, dataDir: liveDataDir, trueForgeRuntime, githubClient });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address() as AddressInfo;
     const isolatedBaseUrl = `http://127.0.0.1:${address.port}`;
@@ -178,7 +228,7 @@ describe("ReproSmith production server", () => {
       expect(body.run.status).toBe("environment-building");
       expect(body.trueForge.status).toBe("started");
       expect(body.trueForge.session.id).toBe("session-live-1");
-      expect(trueForgeRuntime.subscribeToTurn).toHaveBeenCalledWith("session-live-1", "turn-live-1");
+      expect(trueForgeRuntime.subscribeToTurn).toHaveBeenCalledWith("session-live-1", "turn-live-1", expect.any(Function));
 
       let latest: any;
       for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -189,57 +239,226 @@ describe("ReproSmith production server", () => {
         await new Promise((resolve) => setTimeout(resolve, 5));
       }
       expect(latest.trueForge.status).toBe("completed");
-      expect(latest.trueForge.events).toEqual([
-        { sequenceNumber: 1, type: "turn.started" },
-        { sequenceNumber: 2, type: "turn.done" }
-      ]);
+      expect(latest.run.status).toBe("failed");
+      expect(latest.trueForge.error).toContain("valid byter.result contract");
+      expect(latest.trueForge.events).toHaveLength(2);
+      expect(latest.trueForge.events.map((event: { type: string }) => event.type)).toEqual(["step.started", "step.done"]);
+      expect(latest.trueForge.events[0]).toMatchObject({
+        type: "step.started",
+        category: "agent",
+        source: "trueforge"
+      });
+      expect(latest.trueForge.events[0].sequenceNumber).toBeUndefined();
+      expect(latest.trueForge.session).toBeUndefined();
+      expect(latest.trueForge.turn).toBeUndefined();
       expect(JSON.stringify(latest)).not.toContain("do-not-persist");
+      expect(githubClient.createIssueComment).toHaveBeenCalledTimes(2);
+      expect(githubClient.createIssueComment.mock.calls[1]?.[3]).toContain("No genuine proof contract was returned");
+      expect(githubClient.addLabels).toHaveBeenCalledWith("o", "r", 20, ["byter:triaging"]);
       await expect(readFile(join(liveDataDir, "webhook-runs.jsonl"), "utf8")).resolves.toContain("session-live-1");
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     }
   });
 
+  it("recovers a missing TrueForge result contract without inventing proof", async () => {
+    const staticDir = await mkdtemp(join(tmpdir(), "byter-static-"));
+    const liveDataDir = await mkdtemp(join(tmpdir(), "byter-data-"));
+    await writeFile(join(staticDir, "index.html"), "<main>Byter</main>", "utf8");
+    const recoveryResult = JSON.stringify({
+      kind: "byter.result",
+      status: "verified",
+      summary: "The reported tokenizer failure was reproduced three times.",
+      proof: { before: "3/3 failed", after: "3/3 passed", regressions: "Focused regression passed", attempts: "3/3" },
+      candidatePatch: null
+    });
+    const trueForgeRuntime = {
+      startSession: vi.fn().mockResolvedValue({
+        session: { id: "session-recovery-1", title: null },
+        turn: { id: "turn-recovery-1", sessionId: "session-recovery-1", status: "running" }
+      }),
+      requestProofContract: vi.fn().mockResolvedValue({
+        id: "turn-recovery-2",
+        sessionId: "session-recovery-1",
+        status: "running"
+      }),
+      subscribeToTurn: vi.fn().mockImplementation(async (_sessionId: string, turnId: string) => {
+        if (turnId === "turn-recovery-1") {
+          return [{ sequenceNumber: 1, type: "turn.done", raw: { state: { status: "done" } } }];
+        }
+        return [
+          { sequenceNumber: 2, type: "model.message", raw: { tool_calls: [{ function: { name: "submit_byter_result", arguments: recoveryResult } }] } },
+          { sequenceNumber: 3, type: "turn.done", raw: { state: { status: "done" } } }
+        ];
+      })
+    };
+    const githubClient = {
+      createIssueComment: vi.fn().mockResolvedValue({ id: 702, html_url: "https://github.test/issues/22#issuecomment-702" }),
+      addLabels: vi.fn().mockResolvedValue(undefined)
+    } as any;
+    const server = createByterServer({ staticDir, dataDir: liveDataDir, trueForgeRuntime, githubClient });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address() as AddressInfo;
+    const isolatedBaseUrl = `http://127.0.0.1:${address.port}`;
+    const payload = JSON.stringify({
+      action: "opened",
+      issue: {
+        number: 22,
+        title: "Parser crash with trailing escape",
+        body: "Trailing escape crashes the parser.",
+        html_url: "https://github.test/o/r/issues/22"
+      },
+      repository: {
+        name: "r",
+        full_name: "o/r",
+        default_branch: "main",
+        owner: { login: "o" }
+      }
+    });
+
+    try {
+      const response = await fetch(`${isolatedBaseUrl}/api/github/webhook`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-GitHub-Event": "issues",
+          "X-GitHub-Delivery": "delivery-recovery-22",
+          "X-Hub-Signature-256": signWebhookPayload(payload, "webhook-secret")
+        },
+        body: payload
+      });
+      expect(response.status).toBe(202);
+
+      let latest: any;
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        latest = await fetch(`${isolatedBaseUrl}/api/runs/latest`).then((latestResponse) => latestResponse.json());
+        if (latest.trueForge.status === "completed") break;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(trueForgeRuntime.requestProofContract).toHaveBeenCalledWith("session-recovery-1");
+      expect(trueForgeRuntime.subscribeToTurn).toHaveBeenCalledTimes(2);
+      expect(latest.run.status).toBe("verified");
+      expect(latest.trueForge.error).toBeUndefined();
+      expect(latest.trueForge.result.status).toBe("verified");
+      expect(githubClient.addLabels).toHaveBeenCalledWith("o", "r", 22, ["byter:verified"]);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    }
+  });
+
+  it("refreshes persisted TrueForge events when the stream omits the final output", async () => {
+    const staticDir = await mkdtemp(join(tmpdir(), "byter-static-"));
+    const liveDataDir = await mkdtemp(join(tmpdir(), "byter-data-"));
+    await writeFile(join(staticDir, "index.html"), "<main>Byter</main>", "utf8");
+    const recoveryResult = JSON.stringify({
+      kind: "byter.result",
+      status: "verified",
+      summary: "The persisted terminal output contains the verified proof.",
+      proof: { before: "3/3 failed", after: "3/3 passed", regressions: "Focused regression passed", attempts: "3/3" },
+      candidatePatch: null
+    });
+    const trueForgeRuntime = {
+      startSession: vi.fn().mockResolvedValue({
+        session: { id: "session-refresh-1", title: null },
+        turn: { id: "turn-refresh-1", sessionId: "session-refresh-1", status: "running" }
+      }),
+      subscribeToTurn: vi.fn().mockResolvedValue([
+        { sequenceNumber: 1, type: "turn.done", raw: { state: { status: "done", output: null } } }
+      ]),
+      listSessionEvents: vi.fn().mockResolvedValue([
+        { sequenceNumber: 2, type: "turn.done", raw: { state: { status: "done", output: { content: recoveryResult } } } }
+      ])
+    };
+    const githubClient = {
+      createIssueComment: vi.fn().mockResolvedValue({ id: 703, html_url: "https://github.test/issues/23#issuecomment-703" }),
+      addLabels: vi.fn().mockResolvedValue(undefined)
+    } as any;
+    const server = createByterServer({ staticDir, dataDir: liveDataDir, trueForgeRuntime, githubClient });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address() as AddressInfo;
+    const isolatedBaseUrl = `http://127.0.0.1:${address.port}`;
+    const payload = JSON.stringify({
+      action: "opened",
+      issue: {
+        number: 23,
+        title: "Persisted proof output",
+        body: "The terminal output is only available through the session event list.",
+        html_url: "https://github.test/o/r/issues/23"
+      },
+      repository: {
+        name: "r",
+        full_name: "o/r",
+        default_branch: "main",
+        owner: { login: "o" }
+      }
+    });
+
+    try {
+      const response = await fetch(`${isolatedBaseUrl}/api/github/webhook`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-GitHub-Event": "issues",
+          "X-GitHub-Delivery": "delivery-refresh-23",
+          "X-Hub-Signature-256": signWebhookPayload(payload, "webhook-secret")
+        },
+        body: payload
+      });
+      expect(response.status).toBe(202);
+
+      let latest: any;
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        latest = await fetch(`${isolatedBaseUrl}/api/runs/latest`).then((latestResponse) => latestResponse.json());
+        if (latest.trueForge.status === "completed") break;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(trueForgeRuntime.listSessionEvents).toHaveBeenCalledWith("session-refresh-1");
+      expect(latest.run.status).toBe("verified");
+      expect(latest.trueForge.result.status).toBe("verified");
+      expect(githubClient.addLabels).toHaveBeenCalledWith("o", "r", 23, ["byter:verified"]);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    }
+  });
+
   it("persists live proof, exposes approval, and creates a PR through approved MCP tools", async () => {
-    const staticDir = await mkdtemp(join(tmpdir(), "reprosmith-static-"));
-    const liveDataDir = await mkdtemp(join(tmpdir(), "reprosmith-data-"));
-    await writeFile(join(staticDir, "index.html"), "<main>ReproSmith</main>", "utf8");
+    const staticDir = await mkdtemp(join(tmpdir(), "byter-static-"));
+    const liveDataDir = await mkdtemp(join(tmpdir(), "byter-data-"));
+    await writeFile(join(staticDir, "index.html"), "<main>Byter</main>", "utf8");
+    const proofText = JSON.stringify({
+      kind: "byter.result",
+      status: "patch-ready",
+      summary: "Reproduced 3/3 and passed the regression check.",
+      proof: { before: "3/3 failed in /tmp/private/repro.ts with token=fixture-sensitive", after: "3/3 passed", regressions: "passed", attempts: "3/3" },
+      candidatePatch: {
+        title: "Fix parser crash",
+        body: "Verified by Byter.",
+        baseBranch: "main",
+        files: [{ path: "src/parser.ts", content: "export const fixed = true;\n" }]
+      }
+    });
     const trueForgeRuntime = {
       startSession: vi.fn().mockResolvedValue({
         session: { id: "session-proof-1", title: null },
         turn: { id: "turn-proof-1", sessionId: "session-proof-1", status: "running" }
       }),
       subscribeToTurn: vi.fn().mockResolvedValue([
-        { sequenceNumber: 1, type: "turn.done", raw: {
+        { sequenceNumber: 1, type: "model.message.delta", raw: {
+          event: {
+            type: "model.message.delta",
+            content: `Proof complete. Candidate patch follows:\n\`\`\`json\n${proofText.slice(0, Math.ceil(proofText.length / 2))}`
+          }
+        } },
+        { sequenceNumber: 2, type: "model.message.delta", raw: {
+          event: {
+            type: "model.message.delta",
+            content: `${proofText.slice(Math.ceil(proofText.length / 2))}\n\`\`\``
+          }
+        } },
+        { sequenceNumber: 3, type: "turn.done", raw: {
           event: {
             type: "turn.done",
-            state: {
-              status: "done",
-              output: {
-                type: "model.message",
-                content: [
-                  {
-                    type: "text",
-                    text: [
-                      "Proof complete. Candidate patch follows:",
-                      "```json",
-                      JSON.stringify({
-                        status: "patch-ready",
-                        summary: "Reproduced 3/3 and passed the regression check.",
-                        proof: { before: "3/3 failed", after: "3/3 passed", regressions: "passed", attempts: "3/3" },
-                        candidatePatch: {
-                          title: "Fix parser crash",
-                          body: "Verified by ReproSmith.",
-                          baseBranch: "main",
-                          files: [{ path: "src/parser.ts", content: "export const fixed = true;\n" }]
-                        }
-                      }),
-                      "```"
-                    ].join("\n")
-                  }
-                ]
-              }
-            }
+            state: { status: "done" }
           }
         } }
       ])
@@ -247,7 +466,12 @@ describe("ReproSmith production server", () => {
     const githubTools = { callTool: vi.fn().mockResolvedValue({
       content: [{ type: "text", text: JSON.stringify({ number: 42, url: "https://github.test/pull/42" }) }]
     }) };
-    const server = createReproSmithServer({ staticDir, dataDir: liveDataDir, trueForgeRuntime, githubTools });
+    const githubClient = {
+      createIssueComment: vi.fn().mockResolvedValue({ id: 700, html_url: "https://github.test/issues/21#issuecomment-700" }),
+      addLabels: vi.fn().mockResolvedValue(undefined),
+      updateIssueComment: vi.fn().mockImplementation(async (_owner: string, _repo: string, id: number) => ({ id, html_url: "https://github.test/issues/21#issuecomment-700" }))
+    } as any;
+    const server = createByterServer({ staticDir, dataDir: liveDataDir, trueForgeRuntime, githubTools, githubClient });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address() as AddressInfo;
     const isolatedBaseUrl = `http://127.0.0.1:${address.port}`;
@@ -288,15 +512,46 @@ describe("ReproSmith production server", () => {
       }
       expect(latest.run.status).toBe("awaiting-approval");
       expect(latest.trueForge.result.candidatePatch.files[0].path).toBe("src/parser.ts");
+      expect(latest.trueForge.result.proof.before).toContain("[sandbox path]");
+      expect(latest.issueBody).toBe("Trailing escape crashes the parser.");
+      expect(JSON.stringify(latest)).not.toContain("/tmp/private/repro.ts");
+      expect(JSON.stringify(latest)).not.toContain("fixture-sensitive");
+      expect(latest.githubComments).toHaveLength(1);
+      expect(latest.verifiedLabel.name).toBe("byter:verified");
+      expect(githubClient.createIssueComment).toHaveBeenCalledTimes(1);
+      expect(githubClient.createIssueComment.mock.calls[0]?.[3]).toContain("## Byter · Environment building");
+      expect(githubClient.createIssueComment.mock.calls[0]?.[3]).not.toContain("approve");
+      expect(githubClient.updateIssueComment).toHaveBeenCalledTimes(1);
+      expect(githubClient.updateIssueComment.mock.calls[0]?.[3]).toContain("### Proposed fix");
+      expect(githubClient.updateIssueComment.mock.calls[0]?.[3]).toContain("Review evidence & approve patch");
+      expect(githubClient.updateIssueComment.mock.calls[0]?.[3]).toContain("src/parser.ts");
+      expect(githubClient.updateIssueComment.mock.calls[0]?.[3]).not.toContain("export const fixed = true;");
+      expect(githubClient.addLabels).toHaveBeenCalledWith("o", "r", 21, ["byter:verified"]);
+      expect(githubClient.addLabels).toHaveBeenCalledWith("o", "r", 21, ["byter:awaiting-approval"]);
+      const runRecord = await fetch(`${isolatedBaseUrl}/api/runs/${encodeURIComponent(latest.run.id)}`).then((runResponse) => runResponse.json());
+      expect(runRecord.run.id).toBe(latest.run.id);
+      expect(runRecord.trueForge.session).toBeUndefined();
+      expect(runRecord.trueForge.turn).toBeUndefined();
 
-      const approval = await fetch(`${isolatedBaseUrl}/api/approvals`, {
+      const approvalPayload = JSON.stringify({
+        action: "created",
+        issue: payload ? JSON.parse(payload).issue : undefined,
+        comment: {
+          body: "approve",
+          user: { login: "maintainer" },
+          author_association: "OWNER"
+        },
+        repository: JSON.parse(payload).repository
+      });
+      const approval = await fetch(`${isolatedBaseUrl}/api/github/webhook`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: "Bearer approval-token" },
-        body: JSON.stringify({
-          runId: latest.run.id,
-          actionId: "approve-pr",
-          patchHash: latest.trueForge.result.candidatePatch.hash
-        })
+        headers: {
+          "Content-Type": "application/json",
+          "X-GitHub-Event": "issue_comment",
+          "X-GitHub-Delivery": "delivery-approval-21",
+          "X-Hub-Signature-256": signWebhookPayload(approvalPayload, "webhook-secret")
+        },
+        body: approvalPayload
       });
       const approvalBody = await approval.json();
 
@@ -307,19 +562,25 @@ describe("ReproSmith production server", () => {
         name: "create_fix_pull_request",
         approval: expect.objectContaining({ approved: true })
       }));
-      const duplicateApproval = await fetch(`${isolatedBaseUrl}/api/approvals`, {
+      const duplicateApproval = await fetch(`${isolatedBaseUrl}/api/github/webhook`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: "Bearer approval-token" },
-        body: JSON.stringify({
-          runId: latest.run.id,
-          actionId: "approve-pr",
-          patchHash: latest.trueForge.result.candidatePatch.hash
-        })
+        headers: {
+          "Content-Type": "application/json",
+          "X-GitHub-Event": "issue_comment",
+          "X-GitHub-Delivery": "delivery-approval-21-duplicate",
+          "X-Hub-Signature-256": signWebhookPayload(approvalPayload, "webhook-secret")
+        },
+        body: approvalPayload
       });
       expect(duplicateApproval.status).toBe(200);
       expect(githubTools.callTool).toHaveBeenCalledTimes(1);
       const finalRun = await fetch(`${isolatedBaseUrl}/api/runs/latest`).then((latestResponse) => latestResponse.json());
       expect(finalRun.run.status).toBe("pr-created");
+      expect(finalRun.trueForge.result.pullRequest).toEqual({ number: 42, url: "https://github.test/pull/42" });
+      expect(githubClient.createIssueComment).toHaveBeenCalledTimes(1);
+      expect(githubClient.updateIssueComment).toHaveBeenCalledTimes(2);
+      expect(githubClient.updateIssueComment.mock.calls.at(-1)?.[3]).toContain("Fix proposed");
+      expect(githubClient.updateIssueComment.mock.calls.at(-1)?.[3]).not.toContain("awaiting");
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     }
@@ -389,9 +650,9 @@ describe("ReproSmith production server", () => {
   });
 
   it("requires DATA_DIR before accepting persistent write endpoints", async () => {
-    const staticDir = await mkdtemp(join(tmpdir(), "reprosmith-static-"));
-    await writeFile(join(staticDir, "index.html"), "<main>ReproSmith</main>", "utf8");
-    const server = createReproSmithServer({ staticDir });
+    const staticDir = await mkdtemp(join(tmpdir(), "byter-static-"));
+    await writeFile(join(staticDir, "index.html"), "<main>Byter</main>", "utf8");
+    const server = createByterServer({ staticDir });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address() as AddressInfo;
     const isolatedBaseUrl = `http://127.0.0.1:${address.port}`;
@@ -456,7 +717,7 @@ describe("ReproSmith production server", () => {
     const previousCwd = process.cwd();
     process.chdir(packageDir);
     try {
-      const server = createReproSmithServer();
+      const server = createByterServer();
       await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
       const address = server.address() as AddressInfo;
       const response = await fetch(`http://127.0.0.1:${address.port}`);

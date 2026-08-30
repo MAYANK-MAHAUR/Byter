@@ -13,6 +13,11 @@ export interface GitHubIssue {
   state: string;
 }
 
+export interface GitHubIssueComment {
+  id: number;
+  html_url: string;
+}
+
 export interface GitHubContentFile {
   path: string;
   sha: string;
@@ -39,6 +44,10 @@ export interface GitHubPullRequest {
   html_url: string;
 }
 
+export interface GitHubCollaboratorPermission {
+  permission: string;
+}
+
 export class GitHubRestClient {
   private readonly token: string;
   private readonly apiBaseUrl: string;
@@ -48,7 +57,7 @@ export class GitHubRestClient {
   constructor(options: GitHubClientOptions) {
     this.token = options.token;
     this.apiBaseUrl = (options.apiBaseUrl ?? "https://api.github.com").replace(/\/+$/, "");
-    this.userAgent = options.userAgent ?? "ReproSmith/0.1.0";
+    this.userAgent = options.userAgent ?? "Byter/0.1.0";
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
@@ -70,14 +79,64 @@ export class GitHubRestClient {
     });
   }
 
+  async removeLabel(owner: string, repo: string, issueNumber: number, label: string): Promise<void> {
+    await this.request(
+      `${repoBasePath(owner, repo)}/issues/${validateIssueNumber(issueNumber)}/labels/${encodeURIComponent(expectNonEmpty(label, "label name"))}`,
+      { method: "DELETE" }
+    );
+  }
+
+  async createLabel(owner: string, repo: string, name: string, color: string, description: string): Promise<void> {
+    if (!/^[0-9a-f]{6}$/i.test(color)) {
+      throw new Error("Invalid GitHub label color");
+    }
+
+    await this.request(`${repoBasePath(owner, repo)}/labels`, {
+      method: "POST",
+      body: JSON.stringify({
+        name: expectNonEmpty(name, "label name"),
+        color,
+        description
+      })
+    });
+  }
+
+  async updateLabel(owner: string, repo: string, name: string, color: string, description: string): Promise<void> {
+    if (!/^[0-9a-f]{6}$/i.test(color)) {
+      throw new Error("Invalid GitHub label color");
+    }
+
+    await this.request(`${repoBasePath(owner, repo)}/labels/${encodeURIComponent(expectNonEmpty(name, "label name"))}`, {
+      method: "PATCH",
+      body: JSON.stringify({ color, description })
+    });
+  }
+
+  async getCollaboratorPermission(owner: string, repo: string, username: string): Promise<GitHubCollaboratorPermission> {
+    return this.request<GitHubCollaboratorPermission>(
+      `${repoBasePath(owner, repo)}/collaborators/${encodeURIComponent(expectNonEmpty(username, "GitHub username"))}/permission`
+    );
+  }
+
   async createIssueComment(
     owner: string,
     repo: string,
     issueNumber: number,
     body: string
-  ): Promise<{ html_url: string }> {
-    return this.request<{ html_url: string }>(`${repoBasePath(owner, repo)}/issues/${validateIssueNumber(issueNumber)}/comments`, {
+  ): Promise<GitHubIssueComment> {
+    return this.request<GitHubIssueComment>(`${repoBasePath(owner, repo)}/issues/${validateIssueNumber(issueNumber)}/comments`, {
       method: "POST",
+      body: JSON.stringify({ body })
+    });
+  }
+
+  async updateIssueComment(owner: string, repo: string, commentId: number, body: string): Promise<GitHubIssueComment> {
+    if (!Number.isInteger(commentId) || commentId < 1) {
+      throw new Error("Invalid GitHub issue comment id");
+    }
+
+    return this.request<GitHubIssueComment>(`${repoBasePath(owner, repo)}/issues/comments/${commentId}`, {
+      method: "PATCH",
       body: JSON.stringify({ body })
     });
   }

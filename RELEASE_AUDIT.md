@@ -1,4 +1,8 @@
-# ReproSmith Release Audit
+# Byter Release Audit
+
+> Historical note: this document describes the pre-live-integration audit. The
+> current implementation status is documented in `docs/HARNESS_VISIBILITY_AUDIT.md`
+> and `docs/ARCHITECTURE.md`.
 
 Audit date: 2026-08-28
 Branch audited: `chore/release-readiness-audit`
@@ -8,13 +12,13 @@ Base remote observed: `https://github.com/MAYANK-MAHAUR/Byter.git`
 
 Status: PARTIALLY VERIFIED
 
-ReproSmith is no longer just a static mock dashboard. The repository now has a production Node server, live local API data, signed GitHub issues webhook intake, optional webhook-to-TrueForge session handoff, persisted approval receipts, an authenticated remote MCP transport, and an approval-gated MCP tool that can create a fix branch and draft pull request when wired to GitHub credentials.
+Byter is no longer just a static mock dashboard. The repository now has a production Node server, live local API data, signed GitHub issues webhook intake, optional webhook-to-TrueForge session handoff, persisted approval receipts, an authenticated remote MCP transport, and an approval-gated MCP tool that can create a fix branch and draft pull request when wired to GitHub credentials.
 
 It is not honestly production-complete yet. Live TrueForge execution, AgentRouter header behavior inside the deployed TrueForge fork, Daytona sandbox execution, Railway deployment, and a real GitHub issue -> webhook -> TrueForge session -> draft PR run were not verified in this audit environment.
 
 ## What TrueForge Is
 
-TrueForge is the agent harness/runtime around the AI model. It is not AgentRouter and it is not the model itself. ReproSmith uses TrueForge as the orchestration layer that owns agent sessions, turns, tool calls, sandbox access, subagents, approvals, events, and state.
+TrueForge is the agent harness/runtime around the AI model. It is not AgentRouter and it is not the model itself. Byter uses TrueForge as the orchestration layer that owns agent sessions, turns, tool calls, sandbox access, subagents, approvals, events, and state.
 
 Sources checked:
 
@@ -22,7 +26,7 @@ Sources checked:
 - https://trueforge.dev/introduction
 - https://github.com/truefoundry/trueforge
 
-AgentRouter is the model gateway. The user-provided TrueForge fork is expected to add AgentRouter's required Cline-compatible `User-Agent` header on model-provider requests. That behavior lives in the TrueForge service/fork, not in ReproSmith's TrueForge client call.
+AgentRouter is the model gateway. The user-provided TrueForge fork is expected to add AgentRouter's required Cline-compatible `User-Agent` header on model-provider requests. That behavior lives in the TrueForge service/fork, not in Byter's TrueForge client call.
 
 ## Repository Identity
 
@@ -44,7 +48,7 @@ Commands run locally:
 
 - `pnpm install --frozen-lockfile` passed.
 - `pnpm verify` passed after the production server, webhook route, failed state, and draft PR MCP changes.
-- Fresh clone from `https://github.com/MAYANK-MAHAUR/Byter.git` into `D:\Temp\reprosmith-audit-20260828-180933\reprosmith` passed `pnpm install --frozen-lockfile` and `pnpm verify` on the then-current `main`.
+- Fresh clone from `https://github.com/MAYANK-MAHAUR/Byter.git` into `D:\Temp\byter-audit-20260828-180933\byter` passed `pnpm install --frozen-lockfile` and `pnpm verify` on the then-current `main`.
 
 CI evidence:
 
@@ -68,7 +72,7 @@ CI evidence:
 | Reproduction verifier | VERIFIED | 3/3 same-fingerprint reproduction and flaky/not-reproduced classification are tested. |
 | Patch validation | VERIFIED | Before-fail/after-pass/regression-pass path is tested with symlink and protected-path defenses. |
 | Minimization | VERIFIED | Reproducer minimization has focused tests. |
-| Dashboard data | VERIFIED | Live mode reads /api/runs/latest and posts approvals to the server; demo data is explicit via VITE_REPROSMITH_DATA_MODE=demo; no old static demoRun fixture remains in apps/web/src. |
+| Dashboard data | VERIFIED | Live mode reads /api/runs/latest and posts approvals to the server; demo data is explicit via VITE_BYTER_DATA_MODE=demo; no old static demoRun fixture remains in apps/web/src. |
 | Production server | VERIFIED | `/healthz`, static dashboard, `/api/demo-run`, `/api/runs/latest`, `/api/approvals`, and `/api/github/webhook` were probed locally on `http://127.0.0.1:4180`. |
 | Approval persistence | PARTIALLY VERIFIED | Approval receipts require bearer auth and current-run validation, then persist to JSONL with `DATA_DIR`; this is not a database. |
 | Dockerfile | PARTIALLY VERIFIED | Dockerfile and `.dockerignore` exist; local `docker --version` failed because Docker is not installed. |

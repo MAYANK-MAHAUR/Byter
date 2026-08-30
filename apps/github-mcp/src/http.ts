@@ -15,12 +15,14 @@ const protocolVersion = "2024-11-05";
 export interface GitHubMcpHttpHandlerOptions {
   client: GitHubRestClientLike;
   authToken: string;
+  readOnly?: boolean;
 }
 
 export function createGitHubMcpHttpHandler(
   options: GitHubMcpHttpHandlerOptions
 ): (request: IncomingMessage, response: ServerResponse) => Promise<void> {
   const tools = createGitHubMcpTools({ client: options.client });
+  const exposedTools = listGitHubTools().filter((tool) => !options.readOnly || !tool.requiresApproval);
 
   return async (request, response) => {
     if (request.method !== "POST") {
@@ -49,7 +51,7 @@ export function createGitHubMcpHttpHandler(
     }
 
     try {
-      const result = await dispatchRequest(rpcRequest, tools);
+      const result = await dispatchRequest(rpcRequest, tools, exposedTools);
       sendJson(response, 200, result);
     } catch (error) {
       sendJson(response, 200, errorResponse(rpcRequest.id, -32602, error instanceof Error ? error.message : "Invalid MCP parameters"));
@@ -59,22 +61,27 @@ export function createGitHubMcpHttpHandler(
 
 async function dispatchRequest(
   request: JsonRpcRequest,
-  tools: ReturnType<typeof createGitHubMcpTools>
+  tools: ReturnType<typeof createGitHubMcpTools>,
+  exposedTools: ReturnType<typeof listGitHubTools>
 ): Promise<JsonRpcResponse> {
   if (request.method === "initialize") {
     return successResponse(request.id, {
       protocolVersion,
       capabilities: { tools: {} },
-      serverInfo: { name: "reprosmith-github", version: "0.1.0" }
+      serverInfo: { name: "byter-github", version: "0.1.0" }
     });
   }
 
   if (request.method === "tools/list") {
     return successResponse(request.id, {
-      tools: listGitHubTools().map((tool) => ({
+      tools: exposedTools.map((tool) => ({
         name: tool.name,
         description: tool.description,
-        inputSchema: inputSchemaFor(tool.name)
+        inputSchema: inputSchemaFor(tool.name),
+        annotations: {
+          readOnlyHint: !tool.requiresApproval,
+          destructiveHint: tool.name === "create_fix_pull_request"
+        }
       }))
     });
   }
@@ -82,6 +89,9 @@ async function dispatchRequest(
   if (request.method === "tools/call") {
     const params = asRecord(request.params);
     const name = expectToolName(params.name);
+    if (!exposedTools.some((tool) => tool.name === name)) {
+      return errorResponse(request.id, -32602, "Tool is not enabled for this MCP connection");
+    }
     const args = asRecord(params.arguments);
     let result: GitHubMcpToolResult;
 
@@ -126,6 +136,58 @@ function inputSchemaFor(name: GitHubMcpToolName) {
           repo: { type: "string" },
           path: { type: "string" },
           ref: { type: "string" }
+        }
+      };
+    case "submit_byter_result":
+      return {
+        type: "object",
+        additionalProperties: false,
+        required: ["kind", "status", "summary", "proof", "candidatePatch"],
+        properties: {
+          kind: { type: "string", const: "byter.result" },
+          status: {
+            type: "string",
+            enum: ["patch-ready", "verified", "not-reproduced", "blocked", "failed"]
+          },
+          summary: { type: "string" },
+          proof: {
+            type: "object",
+            additionalProperties: false,
+            required: ["before", "after", "regressions", "attempts"],
+            properties: {
+              before: { type: "string" },
+              after: { type: "string" },
+              regressions: { type: "string" },
+              attempts: { type: "string" }
+            }
+          },
+          candidatePatch: {
+            anyOf: [
+              {
+                type: "object",
+                additionalProperties: false,
+                required: ["title", "body", "files"],
+                properties: {
+                  title: { type: "string" },
+                  body: { type: "string" },
+                  files: {
+                    type: "array",
+                    minItems: 1,
+                    items: {
+                      type: "object",
+                      additionalProperties: false,
+                      required: ["path", "content"],
+                      properties: {
+                        path: { type: "string" },
+                        content: { type: "string" }
+                      }
+                    }
+                  }
+                }
+              },
+              { type: "null" }
+            ]
+          }
         }
       };
     case "comment_on_issue":
@@ -212,6 +274,7 @@ function expectToolName(value: unknown): GitHubMcpToolName {
   if (
     value === "read_issue" ||
     value === "read_file" ||
+    value === "submit_byter_result" ||
     value === "add_verified_label" ||
     value === "comment_on_issue" ||
     value === "create_fix_pull_request"

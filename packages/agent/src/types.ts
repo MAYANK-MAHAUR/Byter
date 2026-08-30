@@ -23,7 +23,9 @@ export interface TrueForgeRuntimeEvent {
   raw: unknown;
 }
 
-export interface StartReproSmithSessionInput {
+export type TrueForgeRuntimeEventListener = (event: TrueForgeRuntimeEvent) => void | Promise<void>;
+
+export interface StartByterSessionInput {
   issueUrl: string;
   issueTitle: string;
   issueBody: string;
@@ -31,7 +33,7 @@ export interface StartReproSmithSessionInput {
   baseSha?: string;
 }
 
-export interface StartReproSmithSessionResult {
+export interface StartByterSessionResult {
   session: TrueForgeSession;
   turn: TrueForgeTurn;
 }

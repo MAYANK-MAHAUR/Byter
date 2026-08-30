@@ -86,8 +86,58 @@ describe("GitHub MCP HTTP transport", () => {
       4
     );
 
-    expect(client.addLabels).toHaveBeenCalledWith("o", "r", 17, ["reprosmith:verified"]);
-    expect(result.result.content[0].text).toContain("Added reprosmith:verified label.");
+    expect(client.addLabels).toHaveBeenCalledWith("o", "r", 17, ["byter:verified"]);
+    expect(result.result.content[0].text).toContain("Added byter:verified label.");
+  });
+
+  it("can expose a read-only tool surface for autonomous agents", async () => {
+    const readOnlyHandler = createGitHubMcpHttpHandler({ client, authToken: "mcp-secret", readOnly: true });
+    const readOnlyServer = createServer((request, response) => {
+      void readOnlyHandler(request, response);
+    });
+    await new Promise<void>((resolve) => readOnlyServer.listen(0, "127.0.0.1", resolve));
+    const address = readOnlyServer.address() as AddressInfo;
+    const readOnlyUrl = "http://127.0.0.1:" + address.port;
+
+    try {
+      const listedResponse = await fetch(readOnlyUrl + "/mcp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer mcp-secret" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 8, method: "tools/list" })
+      });
+      const listed = (await listedResponse.json()) as any;
+
+      expect(listed.result.tools).toEqual([
+        expect.objectContaining({
+          name: "read_issue",
+          annotations: { readOnlyHint: true, destructiveHint: false }
+        }),
+        expect.objectContaining({
+          name: "read_file",
+          annotations: { readOnlyHint: true, destructiveHint: false }
+        }),
+        expect.objectContaining({
+          name: "submit_byter_result",
+          annotations: { readOnlyHint: true, destructiveHint: false }
+        })
+      ]);
+
+      const writeResponse = await fetch(readOnlyUrl + "/mcp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer mcp-secret" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 9,
+          method: "tools/call",
+          params: { name: "add_verified_label", arguments: { owner: "o", repo: "r", issueNumber: 17 } }
+        })
+      });
+      const write = (await writeResponse.json()) as any;
+
+      expect(write.error.message).toBe("Tool is not enabled for this MCP connection");
+    } finally {
+      await new Promise<void>((resolve, reject) => readOnlyServer.close((error) => (error ? reject(error) : resolve())));
+    }
   });
 
   async function callMcp(method: string, params: Record<string, unknown>, id: number) {
