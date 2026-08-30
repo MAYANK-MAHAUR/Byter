@@ -59,6 +59,7 @@ describe("GitHub status comment rendering", () => {
     expect(body).toContain(`## ReproSmith · ${label}`);
     expect(body).toContain("Issue #25");
     expect(body).toContain(stateText);
+    expect(body.length).toBeLessThan(2_000);
     expect(body).not.toContain("secret should stay on the dashboard");
     expect(body).not.toContain("/reprosmith approve");
   });

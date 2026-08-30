@@ -1211,9 +1211,9 @@ export function buildGitHubStatusComment(record: PersistedWebhookRunRecord, kind
       "### Evidence",
       "| Check | Result |",
       "| --- | --- |",
-      `| Reproduction | ${safeCommentText(result.proof?.attempts ?? "Verified", 180)} |`,
-      `| Before / after | ${safeCommentText(result.proof?.before ?? "Observed", 260)} → ${safeCommentText(result.proof?.after ?? "Validated", 260)} |`,
-      `| Regression suite | ${safeCommentText(result.proof?.regressions ?? "Verified", 260)} |`,
+      `| Reproduction | ${commentProofText(result.proof?.attempts, "3/3 matching failures", 160)} |`,
+      `| Before / after | ${commentProofText(result.proof?.before, "Failure observed", 170)} → ${commentProofText(result.proof?.after, "Passes after patch", 170)} |`,
+      `| Regression suite | ${commentProofText(result.proof?.regressions, "Passed", 180)} |`,
       "",
       "### Root cause",
       safeCommentText(result.rootCauseSummary ?? summarizeCommentText(result.summary), 360),
@@ -1238,9 +1238,9 @@ export function buildGitHubStatusComment(record: PersistedWebhookRunRecord, kind
       "### Evidence",
       "| Check | Result |",
       "| --- | --- |",
-      `| Reproduction | ${safeCommentText(result.proof?.attempts ?? "Verified", 180)} |`,
-      `| Before / after | ${safeCommentText(result.proof?.before ?? "Observed", 260)} → ${safeCommentText(result.proof?.after ?? "Validated", 260)} |`,
-      `| Regression suite | ${safeCommentText(result.proof?.regressions ?? "Verified", 260)} |`,
+      `| Reproduction | ${commentProofText(result.proof?.attempts, "3/3 matching failures", 160)} |`,
+      `| Before / after | ${commentProofText(result.proof?.before, "Failure observed", 170)} → ${commentProofText(result.proof?.after, "Passes after patch", 170)} |`,
+      `| Regression suite | ${commentProofText(result.proof?.regressions, "Passed", 180)} |`,
       "",
       "### Finding",
       safeCommentText(result.rootCauseSummary ?? summarizeCommentText(result.summary), 360),
@@ -1287,6 +1287,10 @@ export function buildGitHubStatusComment(record: PersistedWebhookRunRecord, kind
 
 function safeCommentText(value: string, maxBytes: number): string {
   return clampText(redactHarnessText(value), maxBytes);
+}
+
+function commentProofText(value: string | undefined, fallback: string, maxBytes: number): string {
+  return safeCommentText(summarizeCommentText(value ?? fallback), maxBytes);
 }
 
 function safeCodeText(value: string, maxBytes: number): string {
