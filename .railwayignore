@@ -1,5 +1,7 @@
 .git
 .github
+trueforge-repo
+.railway-deploy*
 node_modules
 **/node_modules
 dist
