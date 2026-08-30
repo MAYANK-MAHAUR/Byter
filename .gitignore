@@ -19,6 +19,8 @@ coverage/
 
 # Local runtime state
 .byter/
+.agents/
+PROJECT.md
 PROJECT_STATE.md
 docs/DECISIONS.md
 NEEDS_USER.md

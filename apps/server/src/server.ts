@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { appendFile, mkdir, open, readFile, stat } from "node:fs/promises";
+import { appendFile, mkdir, open, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,6 +39,7 @@ const maxPatchTotalBytes = 2 * 1024 * 1024;
 const maxHarnessEvents = 120;
 const maxHarnessTextBytes = 4 * 1024;
 const demoCacheTtlMs = 5_000;
+const duplicateIssueTriggerWindowMs = 60_000;
 let demoCache: { createdAt: number; summary: DemoRunSummary } | undefined;
 let demoInFlight: Promise<DemoRunSummary> | undefined;
 
@@ -153,6 +154,7 @@ export function createByterServer(options: ByterServerOptions = {}): Server {
   const githubClient = options.githubClient ?? githubClientFromEnv();
   const githubTools = options.githubTools ?? (githubClient ? createGitHubMcpTools({ client: githubClient }) : undefined);
   const mcpHandler = options.mcpHandler ?? githubMcpHandlerFromEnv(githubClient);
+  const activeIssueTriggers = new Set<string>();
 
   return createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
@@ -199,7 +201,8 @@ export function createByterServer(options: ByterServerOptions = {}): Server {
           dataDir ? resolve(dataDir) : undefined,
           trueForgeRuntime,
           githubClient,
-          githubTools
+          githubTools,
+          activeIssueTriggers
         );
         return;
       }
@@ -223,7 +226,8 @@ async function handleGitHubWebhook(
   dataDir: string | undefined,
   trueForgeRuntime: ByterSessionStarter | undefined,
   githubClient: GitHubRestClientLike | undefined,
-  githubTools: GitHubWriteTools | undefined
+  githubTools: GitHubWriteTools | undefined,
+  activeIssueTriggers: Set<string>
 ): Promise<void> {
   if (request.method !== "POST") {
     sendJson(response, 405, { error: "Method not allowed" });
@@ -294,50 +298,83 @@ async function handleGitHubWebhook(
     return;
   }
 
-  const issueText = [webhook.issue.title, webhook.issue.body ?? ""].join("\n");
-  const scan = scanIssueText(issueText);
-  const runId = `github-${webhook.repository.owner.login}-${webhook.repository.name}-${webhook.issue.number}-${createHash("sha256")
-    .update(deliveryId)
-    .digest("hex")
-    .slice(0, 12)}`;
-  let run = createRun(runId, {
-    owner: webhook.repository.owner.login,
-    repo: webhook.repository.name,
-    issueNumber: webhook.issue.number,
-    url: webhook.issue.html_url
-  });
-  run = transitionRun(run, "security-review", "GitHub issue webhook verified and scanned", {
-    evidence: { action: webhook.action, safeToExecute: scan.safeToExecute, findings: scan.findings.length }
-  });
-  run = transitionRun(
-    run,
-    scan.safeToExecute ? "triaging" : "rejected",
-    scan.safeToExecute ? "Issue ready for TrueForge triage" : "Issue rejected by security policy"
-  );
-  const orchestration = await startTrueForgeSessionForIssue(run, webhook, scan.safeToExecute, trueForgeRuntime);
-  run = orchestration.run;
-
-  const record: PersistedWebhookRunRecord = {
-    receivedAt: new Date().toISOString(),
-    deliveryId,
-    repository: webhook.repository.full_name,
-    baseBranch: webhook.repository.default_branch,
-    issueTitle: webhook.issue.title,
-    issueBody: webhook.issue.body ?? "",
-    dashboardUrl: dashboardUrlFor(run.id),
-    run,
-    scan,
-    trueForge: orchestration.trueForge
-  };
-  await mkdir(dataDir, { recursive: true });
-  const labeledRecord = await syncLifecycleLabels(record, githubClient);
-  const commentRecord = await appendGitHubComment(labeledRecord, githubClient, "started");
-  await appendFile(join(dataDir, "webhook-runs.jsonl"), `${JSON.stringify(commentRecord)}\n`, "utf8");
-  if (orchestration.trueForge.status === "started" && trueForgeRuntime?.subscribeToTurn) {
-    void monitorTrueForgeTurn(dataDir, commentRecord, trueForgeRuntime, githubClient);
+  const isExplicitRetrigger = webhook.action === "reopened";
+  const issueTriggerKey = triggerKeyFor(webhook);
+  if (!isExplicitRetrigger) {
+    if (activeIssueTriggers.has(issueTriggerKey)) {
+      sendJson(response, 202, { ignored: true, reason: "Duplicate issue trigger" });
+      return;
+    }
+    activeIssueTriggers.add(issueTriggerKey);
   }
 
-  sendJson(response, 202, commentRecord);
+  const claim = isExplicitRetrigger
+    ? { acquired: true, release: async () => {} }
+    : await acquireAtomicTriggerClaim(dataDir, issueTriggerKey);
+  if (!claim.acquired) {
+    if (!isExplicitRetrigger) {
+      activeIssueTriggers.delete(issueTriggerKey);
+    }
+    sendJson(response, 202, { ignored: true, reason: "Duplicate issue trigger" });
+    return;
+  }
+
+  try {
+    if (await issueTriggerWasRecentlyProcessed(dataDir, webhook)) {
+      sendJson(response, 202, { ignored: true, reason: "Duplicate issue trigger" });
+      return;
+    }
+
+    const issueText = [webhook.issue.title, webhook.issue.body ?? ""].join("\n");
+    const scan = scanIssueText(issueText);
+    const runId = `github-${webhook.repository.owner.login}-${webhook.repository.name}-${webhook.issue.number}-${createHash("sha256")
+      .update(deliveryId)
+      .digest("hex")
+      .slice(0, 12)}`;
+    let run = createRun(runId, {
+      owner: webhook.repository.owner.login,
+      repo: webhook.repository.name,
+      issueNumber: webhook.issue.number,
+      url: webhook.issue.html_url
+    });
+    run = transitionRun(run, "security-review", "GitHub issue webhook verified and scanned", {
+      evidence: { action: webhook.action, safeToExecute: scan.safeToExecute, findings: scan.findings.length }
+    });
+    run = transitionRun(
+      run,
+      scan.safeToExecute ? "triaging" : "rejected",
+      scan.safeToExecute ? "Issue ready for TrueForge triage" : "Issue rejected by security policy"
+    );
+    const orchestration = await startTrueForgeSessionForIssue(run, webhook, scan.safeToExecute, trueForgeRuntime);
+    run = orchestration.run;
+
+    const record: PersistedWebhookRunRecord = {
+      receivedAt: new Date().toISOString(),
+      deliveryId,
+      repository: webhook.repository.full_name,
+      baseBranch: webhook.repository.default_branch,
+      issueTitle: webhook.issue.title,
+      issueBody: webhook.issue.body ?? "",
+      dashboardUrl: dashboardUrlFor(run.id),
+      run,
+      scan,
+      trueForge: orchestration.trueForge
+    };
+    await mkdir(dataDir, { recursive: true });
+    const labeledRecord = await syncLifecycleLabels(record, githubClient);
+    const commentRecord = await appendGitHubComment(labeledRecord, githubClient, "started");
+    await appendFile(join(dataDir, "webhook-runs.jsonl"), `${JSON.stringify(commentRecord)}\n`, "utf8");
+    if (orchestration.trueForge.status === "started" && trueForgeRuntime?.subscribeToTurn) {
+      void monitorTrueForgeTurn(dataDir, commentRecord, trueForgeRuntime, githubClient);
+    }
+
+    sendJson(response, 202, commentRecord);
+  } finally {
+    if (!isExplicitRetrigger) {
+      activeIssueTriggers.delete(issueTriggerKey);
+    }
+    await claim.release();
+  }
 }
 
 interface GitHubApprovalCommand {
@@ -1682,6 +1719,98 @@ async function deliveryWasProcessed(dataDir: string, deliveryId: string): Promis
   }
 }
 
+function triggerKeyFor(webhook: ReturnType<typeof parseIssueWebhook>): string {
+  const contentDigest = createHash("sha256")
+    .update(`${webhook.issue.title}\n${webhook.issue.body ?? ""}`)
+    .digest("hex")
+    .slice(0, 16);
+  return `${webhook.repository.full_name.toLowerCase()}#${webhook.issue.number}:${contentDigest}`;
+}
+
+async function acquireAtomicTriggerClaim(
+  dataDir: string,
+  key: string
+): Promise<{ acquired: boolean; release: () => Promise<void> }> {
+  const claimsDir = join(dataDir, ".claims");
+  await mkdir(claimsDir, { recursive: true });
+  const safeName = createHash("sha256").update(key).digest("hex").slice(0, 24);
+  const claimPath = join(claimsDir, `claim-${safeName}.lock`);
+  const now = Date.now();
+  const token = randomUUID();
+
+  const makeConditionalRelease = (ownerToken: string) => async () => {
+    try {
+      const current = JSON.parse(await readFile(claimPath, "utf8"));
+      if (current?.token === ownerToken) {
+        await unlink(claimPath);
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  try {
+    const handle = await open(claimPath, "wx");
+    await handle.writeFile(JSON.stringify({ key, time: now, token }));
+    await handle.close();
+    return {
+      acquired: true,
+      release: makeConditionalRelease(token)
+    };
+  } catch (err: any) {
+    if (err?.code === "EEXIST") {
+      try {
+        const content = JSON.parse(await readFile(claimPath, "utf8"));
+        if (typeof content?.time === "number" && now - content.time < duplicateIssueTriggerWindowMs) {
+          return { acquired: false, release: async () => {} };
+        }
+        // Stale claim expired: overwrite with new ownership token
+        await writeFile(claimPath, JSON.stringify({ key, time: now, token }));
+        return {
+          acquired: true,
+          release: makeConditionalRelease(token)
+        };
+      } catch {
+        return { acquired: false, release: async () => {} };
+      }
+    }
+    return { acquired: false, release: async () => {} };
+  }
+}
+
+async function issueTriggerWasRecentlyProcessed(
+  dataDir: string,
+  webhook: ReturnType<typeof parseIssueWebhook>
+): Promise<boolean> {
+  if (webhook.action === "reopened") {
+    return false;
+  }
+
+  const cutoff = Date.now() - duplicateIssueTriggerWindowMs;
+  try {
+    for await (const line of readJsonlLines(join(dataDir, "webhook-runs.jsonl"))) {
+      let record: PersistedWebhookRunRecord;
+      try {
+        record = JSON.parse(line) as PersistedWebhookRunRecord;
+      } catch {
+        continue;
+      }
+      if (
+        record.repository === webhook.repository.full_name &&
+        record.run?.issue.issueNumber === webhook.issue.number &&
+        record.issueTitle === webhook.issue.title &&
+        record.issueBody === (webhook.issue.body ?? "") &&
+        Date.parse(record.receivedAt) >= cutoff
+      ) {
+        return true;
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 async function* readJsonlLines(path: string): AsyncGenerator<string> {
   const maxLineBytes = 4 * 1024 * 1024;
   const input = createReadStream(path, { encoding: "utf8", highWaterMark: 64 * 1024 });
@@ -2540,7 +2669,7 @@ function hasExplicitTrigger(webhook: ReturnType<typeof parseIssueWebhook>): bool
   if (/(^|\n)\/byter\s+run(?:\s|$)/i.test(webhook.issue.body ?? "")) {
     return true;
   }
-  return (webhook.action === "opened" || webhook.action === "labeled") && hasTriggerLabel(webhook);
+  return (webhook.action === "opened" || webhook.action === "labeled" || webhook.action === "reopened") && hasTriggerLabel(webhook);
 }
 
 function resultStatusFor(actionId: ApprovalActionId) {
@@ -2626,8 +2755,8 @@ function trueForgeRuntimeFromEnv(): ByterSessionStarter | undefined {
   return new ByterTrueForgeRuntime({
     baseUrl,
     token,
-    modelName: process.env.MODEL_NAME ?? "glm-5.3",
-    modelProvider: process.env.MODEL_PROVIDER ?? "agentrouter",
+    modelName: process.env.MODEL_NAME ?? "gpt-5.6-sol",
+    modelProvider: process.env.MODEL_PROVIDER ?? "openai",
     mcpServerName: process.env.TRUEFORGE_MCP_SERVER_NAME ?? "byter-github"
   });
 }
