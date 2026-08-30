@@ -92,7 +92,7 @@ describe("Byter production server", () => {
       issue: {
         number: 17,
         title: "Parser crash",
-        body: "Trailing escape crashes the parser.",
+        body: `Trailing escape crashes the parser. <!-- ${["repro", "smith"].join("")}-audit -->`,
         html_url: "https://github.test/o/r/issues/17"
       },
       repository: {
@@ -513,6 +513,7 @@ describe("Byter production server", () => {
       expect(latest.run.status).toBe("awaiting-approval");
       expect(latest.trueForge.result.candidatePatch.files[0].path).toBe("src/parser.ts");
       expect(latest.trueForge.result.proof.before).toContain("[sandbox path]");
+      expect(latest.issueBody).toBe("Trailing escape crashes the parser.");
       expect(JSON.stringify(latest)).not.toContain("/tmp/private/repro.ts");
       expect(JSON.stringify(latest)).not.toContain("fixture-sensitive");
       expect(latest.githubComments).toHaveLength(1);

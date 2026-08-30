@@ -563,6 +563,8 @@ function publicRunPayload(value: unknown): unknown {
 
   return {
     ...value,
+    ...(typeof value.issueTitle === "string" ? { issueTitle: safePublicMarkdown(value.issueTitle) } : {}),
+    ...(typeof value.issueBody === "string" ? { issueBody: safePublicMarkdown(value.issueBody) } : {}),
     run: publicRun,
     trueForge: { ...trueForge, result, events },
     verifiedLabel: normalizeLabel(value.verifiedLabel, "byter:verified"),
