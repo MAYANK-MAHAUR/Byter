@@ -92,15 +92,16 @@ the purple `reprosmith:verified` label and the red
 `reprosmith:awaiting-approval` label using the configured GitHub write token.
 The completion comment includes the proposed remedy, bounded file contents,
 the patch hash, and an approval command. A repository maintainer can approve
-that exact patch by posting this as a new issue comment:
+the newest awaiting patch for that issue by posting this as a new issue comment:
 
 ```text
-/reprosmith approve <run-id> <patch-hash>
+approve
 ```
 
-The server verifies the signed webhook, maintainer permission, run ID, and
-patch hash before creating a draft pull request. No branch or pull request is
-created before that approval succeeds.
+The server verifies the signed webhook, maintainer permission, issue, run, and
+stored patch hash before creating a draft pull request. The previous
+`/reprosmith approve <run-id> <patch-hash>` form remains accepted for older
+comments. No branch or pull request is created before that approval succeeds.
 
 For a separately hosted web build, set VITE_REPROSMITH_API_URL=https://<railway-domain> at build time. For local Vite development, set REPROSMITH_API_TARGET=http://127.0.0.1:8787 and run the production server on port 8787; the Vite server proxies API and MCP requests to it.
 

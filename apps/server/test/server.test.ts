@@ -506,7 +506,7 @@ describe("ReproSmith production server", () => {
       expect(githubClient.createIssueComment).toHaveBeenCalledTimes(2);
       expect(githubClient.createIssueComment.mock.calls[1]?.[3]).toContain("### Proposed remedy");
       expect(githubClient.createIssueComment.mock.calls[1]?.[3]).toContain("`reprosmith:verified` added");
-      expect(githubClient.createIssueComment.mock.calls[1]?.[3]).toContain("/reprosmith approve ");
+      expect(githubClient.createIssueComment.mock.calls[1]?.[3]).toContain("```text\napprove\n```");
       expect(githubClient.createIssueComment.mock.calls[1]?.[3]).toContain("src/parser.ts");
       expect(githubClient.updateIssueComment).not.toHaveBeenCalled();
       expect(githubClient.addLabels).toHaveBeenCalledWith("o", "r", 21, ["reprosmith:verified"]);
@@ -518,7 +518,7 @@ describe("ReproSmith production server", () => {
         action: "created",
         issue: payload ? JSON.parse(payload).issue : undefined,
         comment: {
-          body: `/reprosmith approve ${latest.run.id} ${latest.trueForge.result.candidatePatch.hash}`,
+          body: "approve",
           user: { login: "maintainer" },
           author_association: "OWNER"
         },

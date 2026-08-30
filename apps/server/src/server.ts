@@ -335,11 +335,14 @@ async function handleGitHubWebhook(
 }
 
 interface GitHubApprovalCommand {
-  runId: string;
-  patchHash: string;
+  runId?: string;
+  patchHash?: string;
 }
 
 function parseGitHubApprovalCommand(body: string | null): GitHubApprovalCommand | undefined {
+  if (body?.trim().toLowerCase() === "approve") {
+    return {};
+  }
   const match = body?.trim().match(/^\/reprosmith\s+approve\s+(\S+)\s+([a-f0-9]{64})$/i);
   return match ? { runId: match[1], patchHash: match[2].toLowerCase() } : undefined;
 }
@@ -405,8 +408,10 @@ async function handleGitHubIssueCommentWebhook(
     return;
   }
 
-  const liveRecord = await findPersistedRunById(dataDir, command.runId);
   const repository = `${webhook.repository.owner.login}/${webhook.repository.name}`;
+  const liveRecord = command.runId
+    ? await findPersistedRunById(dataDir, command.runId)
+    : await findLatestAwaitingRunByIssue(dataDir, repository, webhook.issue.number);
   if (
     !liveRecord ||
     liveRecord.repository !== repository ||
@@ -416,7 +421,13 @@ async function handleGitHubIssueCommentWebhook(
     return;
   }
 
-  const result = await executeApproval(dataDir, command.runId, "approve-pr", command.patchHash, githubTools, githubClient);
+  const candidateHash = liveRecord.trueForge.result?.candidatePatch?.hash;
+  const patchHash = command.patchHash ?? candidateHash;
+  if (!patchHash) {
+    sendJson(response, 409, { error: "No approved candidate patch is available for this issue" });
+    return;
+  }
+  const result = await executeApproval(dataDir, liveRecord.run.id, "approve-pr", patchHash, githubTools, githubClient);
   sendJson(response, result.statusCode, result.body);
 }
 
@@ -1115,9 +1126,9 @@ function buildGitHubStatusComment(record: PersistedWebhookRunRecord, kind: GitHu
         "### Approve this exact patch",
         "Review the proposed file contents above, then post this as a new issue comment:",
         "",
-        `\`\`\`text\n/reprosmith approve ${record.run.id} ${result.candidatePatch.hash}\n\`\`\``,
+        "```text\napprove\n```",
         "",
-        "Only a repository maintainer can approve. Approval creates a draft pull request; no branch or PR exists before that check passes."
+        "Only a repository maintainer can approve. This selects the newest awaiting patch for this issue, then verifies its stored hash before creating a draft pull request. No branch or PR exists before that check passes."
       );
     }
   } else if (record.run.status === "failed") {
@@ -1211,6 +1222,34 @@ async function findPersistedRunById(dataDir: string | undefined, runId: string):
       try {
         const record = JSON.parse(line) as PersistedWebhookRunRecord;
         if (record.run?.id === runId) match = record;
+      } catch {
+        // Ignore a partial or malformed line.
+      }
+    }
+    return match;
+  } catch {
+    return undefined;
+  }
+}
+
+async function findLatestAwaitingRunByIssue(
+  dataDir: string,
+  repository: string,
+  issueNumber: number
+): Promise<PersistedWebhookRunRecord | undefined> {
+  try {
+    let match: PersistedWebhookRunRecord | undefined;
+    for await (const line of readJsonlLines(join(dataDir, "webhook-runs.jsonl"))) {
+      try {
+        const record = JSON.parse(line) as PersistedWebhookRunRecord;
+        if (
+          record.repository === repository &&
+          record.run?.issue.issueNumber === issueNumber &&
+          record.run.status === "awaiting-approval" &&
+          (!match || Date.parse(record.run.createdAt) > Date.parse(match.run.createdAt))
+        ) {
+          match = record;
+        }
       } catch {
         // Ignore a partial or malformed line.
       }
