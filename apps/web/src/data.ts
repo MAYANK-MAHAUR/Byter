@@ -79,6 +79,9 @@ export interface DashboardRun extends ReproRun {
   model: string;
   currentBranch: string;
   summary?: string;
+  rootCauseSummary?: string;
+  proposedFixSummary?: string;
+  baseSha?: string;
   candidatePatch?: {
     title: string;
     files: string[];
@@ -87,8 +90,10 @@ export interface DashboardRun extends ReproRun {
     verifiedAt: string;
     body?: string;
   };
+  patchDiff?: Array<{ path: string; before: string; after: string }>;
   pullRequest?: { number: number; url: string };
   proof?: { before?: string; after?: string; regressions?: string; attempts?: string };
+  tests: Array<{ id: string; label: string; status: "passed" | "failed" | "pending"; detail: string; log?: string }>;
   harness: HarnessState;
   evidence: EvidenceItem[];
   approvals: ApprovalAction[];
@@ -121,6 +126,10 @@ interface WebhookRunRecord {
     result?: {
       status?: string;
       summary?: string;
+      rootCauseSummary?: string;
+      proposedFixSummary?: string;
+      baseSha?: string;
+      patchDiff?: Array<{ path: string; before: string; after: string }>;
       proof?: { before?: string; after?: string; regressions?: string; attempts?: string };
       candidatePatch?: {
         title: string;
@@ -152,7 +161,7 @@ export async function fetchDashboardRun(fetchImpl: typeof fetch = fetch): Promis
   }
 
   const runId = typeof window !== "undefined" && window.location.pathname.startsWith("/runs/")
-    ? window.location.pathname.slice("/runs/".length)
+    ? window.location.pathname.slice("/runs/".length).replace(/\/review\/?$/, "")
     : undefined;
   const endpoint = runId ? `/api/runs/${encodeURIComponent(decodeURIComponent(runId))}` : "/api/runs/latest";
   const liveResponse = await fetchImpl(apiUrl(endpoint), { cache: "no-store" });
@@ -186,6 +195,13 @@ export function toDashboardRun(summary: DemoRunSummary): DashboardRun {
     model: summary.model,
     currentBranch: summary.currentBranch,
     candidatePatch: summary.candidatePatch,
+    rootCauseSummary: compactSummary(summary.issueTitle),
+    proposedFixSummary: compactSummary(summary.candidatePatch.title),
+    tests: [
+      { id: "reproduction", label: "Reproduction", status: summary.validation.before.status === "verified" ? "passed" : "failed", detail: `${matchedAttempts}/${totalAttempts} attempts matched the seeded failure` },
+      { id: "after", label: "After patch", status: afterPassed ? "passed" : "failed", detail: afterPassed ? "The same reproducer passes after the candidate change" : "The reproducer still fails after the candidate change" },
+      { id: "regression", label: "Regression suite", status: regressionsPassed === undefined ? "pending" : regressionsPassed ? "passed" : "failed", detail: summary.validation.regressions ? `exit ${summary.validation.regressions.exitCode ?? "unknown"}` : "No regression command returned" }
+    ],
     proof: {
       before: `${matchedAttempts}/${totalAttempts} reproduction attempts matched the failure`,
       after: afterPassed ? "Candidate patch passed the reproduction" : "Candidate patch did not pass the reproduction",
@@ -283,6 +299,9 @@ export function toDashboardRunFromWebhook(record: WebhookRunRecord): DashboardRu
     model: record.trueForge?.model ?? (trueForgeStatus === "started" || liveResult ? "Configured by TrueForge" : "Not started"),
     currentBranch: livePatch?.branchName ?? `delivery ${record.deliveryId}`,
     ...(liveResult?.summary ? { summary: liveResult.summary } : {}),
+    ...(liveResult?.rootCauseSummary ? { rootCauseSummary: liveResult.rootCauseSummary } : {}),
+    ...(liveResult?.proposedFixSummary ? { proposedFixSummary: liveResult.proposedFixSummary } : {}),
+    ...(liveResult?.baseSha ? { baseSha: liveResult.baseSha } : {}),
     ...(livePatch
       ? {
           candidatePatch: {
@@ -293,10 +312,12 @@ export function toDashboardRunFromWebhook(record: WebhookRunRecord): DashboardRu
             verifiedAt: livePatch.verifiedAt,
             body: livePatch.body
           }
-        }
+      }
       : {}),
+    ...(liveResult?.patchDiff ? { patchDiff: liveResult.patchDiff } : {}),
     ...(pullRequest ? { pullRequest } : {}),
     ...(liveResult?.proof ? { proof: compactProof(liveResult.proof) } : {}),
+    tests: buildLiveTests(liveResult?.proof, trace),
     harness: {
       model: record.trueForge?.model ?? (trueForgeStatus === "started" || liveResult ? "Configured model" : "Not started"),
       provider: record.trueForge?.provider ?? (trueForgeStatus === "started" || liveResult ? "Configured provider" : "Not started"),
@@ -372,8 +393,8 @@ export function toDashboardRunFromWebhook(record: WebhookRunRecord): DashboardRu
 export const approvalActions: ApprovalAction[] = [
   {
     id: "approve-pr",
-    label: "Approve PR write",
-    description: "Create the verified fix PR with a payload-specific approval hash.",
+    label: "Approve & Resume",
+    description: "Resume TrueForge, commit the verified patch, and open a draft PR.",
     impact: "safe"
   },
   {
@@ -389,6 +410,25 @@ export const approvalActions: ApprovalAction[] = [
     impact: "blocked"
   }
 ];
+
+function buildLiveTests(proof: { before?: string; after?: string; regressions?: string; attempts?: string } | undefined, trace: HarnessTraceEvent[]): DashboardRun["tests"] {
+  const reproductionLog = trace
+    .filter((event) => event.category === "sandbox" && (event.stdout || event.stderr))
+    .map((event) => [event.command ? `$ ${event.command}` : undefined, event.stdout, event.stderr].filter(Boolean).join("\n"))
+    .join("\n\n");
+  return [
+    { id: "reproduction", label: "Reproduction", status: proof?.before ? "passed" : "pending", detail: proof?.attempts ?? "Awaiting reproduction evidence", log: reproductionLog || undefined },
+    { id: "after", label: "After patch", status: proof?.after ? "passed" : "pending", detail: proof?.after ?? "Awaiting post-patch evidence", log: reproductionLog || undefined },
+    { id: "regression", label: "Regression suite", status: proof?.regressions ? "passed" : "pending", detail: proof?.regressions ?? "Awaiting regression evidence", log: reproductionLog || undefined }
+  ];
+}
+
+function compactSummary(value?: string): string | undefined {
+  const compact = value?.replace(/\s+/g, " ").trim();
+  if (!compact) return undefined;
+  const sentence = compact.match(/^.{1,360}?(?:[.!?](?:\s|$)|$)/)?.[0] ?? compact;
+  return sentence.length <= 380 ? sentence : `${sentence.slice(0, 377).trimEnd()}...`;
+}
 
 export const happyPathStatuses: RunStatus[] = [
   "received",

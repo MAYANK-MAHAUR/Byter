@@ -10,6 +10,7 @@ import {
   Cloud,
   Copy,
   FileCode2,
+  FileDiff,
   GitBranch,
   GitCommitHorizontal,
   GitPullRequestArrow,
@@ -23,6 +24,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   Terminal,
+  TestTube2,
   Timer,
   User,
   X
@@ -41,18 +43,20 @@ import {
   type HarnessTraceEvent
 } from "./data";
 
-type ViewId = "overview" | "trace" | "reproduction" | "patch" | "security";
+type ViewId = "overview" | "trace" | "reproduction" | "patch" | "tests" | "security";
 
 const views: Array<{ id: ViewId; label: string; icon: typeof Activity }> = [
   { id: "overview", label: "Overview", icon: Activity },
   { id: "trace", label: "Harness trace", icon: Terminal },
   { id: "reproduction", label: "Reproduction", icon: RadioTower },
   { id: "patch", label: "Patch", icon: FileCode2 },
+  { id: "tests", label: "Tests", icon: TestTube2 },
   { id: "security", label: "Security", icon: ShieldCheck }
 ];
 
 function App() {
   const [run, setRun] = useState<DashboardRun | undefined>();
+  const reviewRoute = typeof window !== "undefined" && /\/review\/?$/.test(window.location.pathname);
   const [activeView, setActiveView] = useState<ViewId>("overview");
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -160,16 +164,19 @@ function App() {
 
       <HarnessPanel harness={run.harness} run={run} />
 
-      <nav className="view-tabs" aria-label="Run evidence views">
-        {views.map(({ id, label, icon: Icon }) => (
-          <button key={id} type="button" className={activeView === id ? "active" : undefined} onClick={() => setActiveView(id)} aria-current={activeView === id ? "page" : undefined}>
-            <Icon size={16} />{label}
-            {id === "trace" ? <span className="tab-count">{run.harness.trace.length}</span> : undefined}
-          </button>
-        ))}
-      </nav>
+      {reviewRoute ? (
+        <ReviewView run={run} currentStatus={currentStatus} pullRequest={pullRequest} approval={approval} approvalError={approvalError} pendingAction={pendingAction} onApproval={handleApproval} />
+      ) : <>
+        <nav className="view-tabs" aria-label="Run evidence views">
+          {views.map(({ id, label, icon: Icon }) => (
+            <button key={id} type="button" className={activeView === id ? "active" : undefined} onClick={() => setActiveView(id)} aria-current={activeView === id ? "page" : undefined}>
+              <Icon size={16} />{label}
+              {id === "trace" ? <span className="tab-count">{run.harness.trace.length}</span> : id === "tests" ? <span className="tab-count">{run.tests.length}</span> : undefined}
+            </button>
+          ))}
+        </nav>
 
-      {activeView === "overview" ? (
+        {activeView === "overview" ? (
         <OverviewView run={run} currentStatus={currentStatus} pullRequest={pullRequest} approval={approval} approvalError={approvalError} pendingAction={pendingAction} onApproval={handleApproval} />
       ) : activeView === "trace" ? (
         <TraceView harness={run.harness} />
@@ -177,9 +184,11 @@ function App() {
         <ReproductionView run={run} />
       ) : activeView === "patch" ? (
         <PatchView run={run} pullRequest={pullRequest} />
+      ) : activeView === "tests" ? (
+        <TestsView run={run} />
       ) : (
         <SecurityView run={run} />
-      )}
+      )}</>}
     </main>
   );
 }
@@ -238,7 +247,7 @@ function AgentRail({ harness, run }: { harness: HarnessState; run: DashboardRun 
 function GitHubActivity({ harness }: { harness: HarnessState }) {
   if (harness.commentHistory.length === 0 && !harness.verifiedLabel && !harness.approvalLabel) return null;
   const latestComment = harness.commentHistory.at(-1);
-  return <div className="github-activity"><div className="rail-label"><MessageSquareText size={15} />GitHub activity</div><div className="github-activity-details"><strong>{harness.commentHistory.length} progress comment{harness.commentHistory.length === 1 ? "" : "s"}</strong>{harness.verifiedLabel?.appliedAt ? <span className="label-chip label-valid">valid</span> : harness.verifiedLabel?.error ? <span className="label-chip label-error">valid label failed</span> : undefined}{harness.approvalLabel?.appliedAt ? <span className="label-chip label-waiting">waiting approval</span> : harness.approvalLabel?.error ? <span className="label-chip label-error">approval label failed</span> : undefined}{latestComment ? <a href={latestComment.url} target="_blank" rel="noreferrer">Open latest update <ArrowUpRight size={13} /></a> : undefined}</div></div>;
+  return <div className="github-activity"><div className="rail-label"><MessageSquareText size={15} />GitHub activity</div><div className="github-activity-details"><strong>{harness.commentHistory.length ? "One editable status comment" : "Status comment pending"}</strong>{harness.verifiedLabel?.appliedAt ? <span className="label-chip label-valid">valid</span> : harness.verifiedLabel?.error ? <span className="label-chip label-error">valid label failed</span> : undefined}{harness.approvalLabel?.appliedAt ? <span className="label-chip label-waiting">waiting approval</span> : harness.approvalLabel?.error ? <span className="label-chip label-error">approval label failed</span> : undefined}{latestComment ? <a href={latestComment.url} target="_blank" rel="noreferrer">Open status comment <ArrowUpRight size={13} /></a> : undefined}</div></div>;
 }
 
 function WorkflowIcon() { return <Layers3 size={15} />; }
@@ -252,7 +261,11 @@ function roleState(harness: HarnessState, toolName: string, status: RunStatus): 
 
 function OverviewView({ run, currentStatus, pullRequest, approval, approvalError, pendingAction, onApproval }: { run: DashboardRun; currentStatus: RunStatus; pullRequest?: { number: number; url: string }; approval?: ApprovalSubmission; approvalError?: string; pendingAction?: ApprovalActionId; onApproval: (actionId: ApprovalActionId) => Promise<void> }) {
   const displayedEvents = appendApprovalEvent(run.events, currentStatus, approval);
-  return <div className="overview-grid"><Timeline events={displayedEvents} status={currentStatus} /><section className="panel why-panel"><PanelTitle eyebrow="Verified finding" title="Why this run matters" icon={<ClipboardCheck size={17} />} /><div className="finding-callout"><ShieldCheck size={20} /><div><strong>{compactSummary(run.summary) ?? run.proof?.before ?? "Proof summary is still being collected"}</strong><p>{run.summary ? run.proof?.before ?? "The failure was reproduced before the candidate change." : run.proof?.after ?? "The harness will place before and after evidence here."}</p></div></div><div className="proof-points"><ProofPoint icon={<Terminal size={15} />} label="Regression check" value={run.proof?.regressions ?? "Not returned yet"} /><ProofPoint icon={<RadioTower size={15} />} label="Attempts" value={run.proof?.attempts ?? "Not returned yet"} /></div></section><ApprovalPanel run={run} currentStatus={currentStatus} pullRequest={pullRequest} approval={approval} approvalError={approvalError} pendingAction={pendingAction} onApproval={onApproval} /></div>;
+  return <div className="overview-grid"><Timeline events={displayedEvents} status={currentStatus} /><WhyVerified run={run} /><ApprovalPanel run={run} currentStatus={currentStatus} pullRequest={pullRequest} approval={approval} approvalError={approvalError} pendingAction={pendingAction} onApproval={onApproval} /></div>;
+}
+
+function WhyVerified({ run }: { run: DashboardRun }) {
+  return <section className="panel why-panel"><PanelTitle eyebrow="Verified finding" title="Why this run matters" icon={<ClipboardCheck size={17} />} /><div className="finding-callout"><ShieldCheck size={20} /><div><strong>{run.rootCauseSummary ?? compactSummary(run.summary) ?? "Proof summary is still being collected"}</strong><p>{run.proposedFixSummary ?? run.proof?.before ?? "The harness will place the verified finding here."}</p></div></div><div className="verification-facts"><span><small>Repository</small><strong>{run.repoLabel}</strong></span><span><small>Base</small><strong>{run.baseSha ? run.baseSha.slice(0, 8) : run.currentBranch}</strong></span><span><small>Reproduction</small><strong>{run.proof?.attempts ?? "Pending"}</strong></span><span><small>Environment</small><strong>{run.runtime}</strong></span></div><div className="proof-points"><ProofPoint icon={<Terminal size={15} />} label="Regression check" value={run.proof?.regressions ?? "Not returned yet"} /><ProofPoint icon={<RadioTower size={15} />} label="Before / after" value={`${run.proof?.before ?? "Pending"} → ${run.proof?.after ?? "Pending"}`} /></div></section>;
 }
 
 function Timeline({ events, status }: { events: RunEvent[]; status: RunStatus }) {
@@ -261,7 +274,7 @@ function Timeline({ events, status }: { events: RunEvent[]; status: RunStatus })
 
 function ApprovalPanel({ run, currentStatus, pullRequest, approval, approvalError, pendingAction, onApproval }: { run: DashboardRun; currentStatus: RunStatus; pullRequest?: { number: number; url: string }; approval?: ApprovalSubmission; approvalError?: string; pendingAction?: ApprovalActionId; onApproval: (actionId: ApprovalActionId) => Promise<void> }) {
   const patch = run.candidatePatch;
-  return <section className="panel approval-panel"><PanelTitle eyebrow="Mutation gate" title={pullRequest ? "Draft pull request" : patch ? patch.title : "Awaiting proof"} icon={<Lock size={17} />} />{patch ? <><div className="approval-meta"><span><Lock size={13} />hash <code>{patch.hash}</code></span><span><FileCode2 size={13} />{patch.files.length} files</span></div><ul className="file-list">{patch.files.map((file) => <li key={file}><FileCode2 size={14} />{file}</li>)}</ul>{currentStatus === "awaiting-approval" && !pullRequest ? <><div className="preapproval-state"><ShieldCheck size={17} /><div><strong>Paused before GitHub mutation</strong><span>No branch or pull request has been created.</span></div></div><GitHubApprovalGuide /></> : undefined}<div className={`approval-state ${approvalError ? "error" : approval ? "saved" : ""}`} role="status">{approvalError ?? approval?.message ?? (pullRequest ? `Draft PR #${pullRequest.number} recorded` : "Maintainer decision required")}</div>{pullRequest ? <a className="button button-success" href={pullRequest.url} target="_blank" rel="noreferrer"><GitPullRequestArrow size={17} />Open draft PR #{pullRequest.number}<ArrowUpRight size={15} /></a> : currentStatus === "awaiting-approval" ? <div className="approval-actions"><p className="control-label">Website controls</p>{run.approvals.map((action) => <ApprovalActionButton key={action.id} action={action} pending={pendingAction === action.id} disabled={pendingAction !== undefined} onClick={onApproval} />)}</div> : undefined}</> : <div className="empty-state"><RadioTower size={20} /><p>{run.events.at(-1)?.message ?? "Run is waiting for a candidate proof."}</p></div>}</section>;
+  return <section className="panel approval-panel"><PanelTitle eyebrow="Mutation gate" title={pullRequest ? "Draft pull request" : patch ? "TrueForge paused" : "Awaiting proof"} icon={<Lock size={17} />} />{patch ? <><div className="approval-request"><strong>{pullRequest ? "GitHub write completed" : "Requested action"}</strong><span>{pullRequest ? "The approved patch is now available as a draft PR." : "Resume TrueForge, create a fix branch, commit this verified patch, and open a draft PR."}</span></div><div className="approval-meta"><span><Lock size={13} />hash <code>{patch.hash}</code></span><span><FileCode2 size={13} />{patch.files.length} files</span></div><ul className="file-list">{patch.files.map((file) => <li key={file}><FileCode2 size={14} />{file}</li>)}</ul>{currentStatus === "awaiting-approval" && !pullRequest ? <><div className="preapproval-state"><ShieldCheck size={17} /><div><strong>TRUEFORGE PAUSED</strong><span>Nothing has been written: no branch, commit, or pull request exists.</span></div></div><GitHubApprovalGuide /></> : undefined}<div className={`approval-state ${approvalError ? "error" : approval ? "saved" : ""}`} role="status">{approvalError ?? approval?.message ?? (pullRequest ? `Draft PR #${pullRequest.number} recorded` : "Maintainer decision required")}</div>{pullRequest ? <a className="button button-success" href={pullRequest.url} target="_blank" rel="noreferrer"><GitPullRequestArrow size={17} />Open draft PR #{pullRequest.number}<ArrowUpRight size={15} /></a> : currentStatus === "awaiting-approval" ? <div className="approval-actions"><p className="control-label">Website controls</p>{run.approvals.map((action) => <ApprovalActionButton key={action.id} action={action} pending={pendingAction === action.id} disabled={pendingAction !== undefined} onClick={onApproval} />)}</div> : undefined}</> : <div className="empty-state"><RadioTower size={20} /><p>{run.events.at(-1)?.message ?? "Run is waiting for a candidate proof."}</p></div>}</section>;
 }
 
 function GitHubApprovalGuide() {
@@ -278,7 +291,7 @@ function GitHubApprovalGuide() {
     }
   }
 
-  return <div className="github-approval-guide"><strong>Approve from GitHub</strong><p>Review the proposed file contents in the Patch tab, then post this exact word as a new issue comment.</p><div className="github-approval-command"><code>{command}</code><button type="button" className="copy-command" onClick={() => void copyCommand()} aria-label="Copy GitHub approval command" title={copied ? "Copied" : "Copy command"}>{copied ? <Check size={16} /> : <Copy size={16} />}</button></div><small>Only repository maintainers can approve. The newest awaiting patch for this issue is selected, then its stored hash is verified before a draft PR is created.</small></div>;
+  return <details className="github-approval-guide"><summary><strong>Optional GitHub fallback</strong></summary><p>Website approval is primary. If needed, a repository maintainer can post this single word on the issue after reviewing the linked evidence.</p><div className="github-approval-command"><code>{command}</code><button type="button" className="copy-command" onClick={() => void copyCommand()} aria-label="Copy GitHub approval word" title={copied ? "Copied" : "Copy word"}>{copied ? <Check size={16} /> : <Copy size={16} />}</button></div><small>Only repository maintainers can approve. The stored candidate hash is checked before any GitHub write.</small></details>;
 }
 
 function ApprovalActionButton({ action, pending, disabled, onClick }: { action: ApprovalAction; pending: boolean; disabled: boolean; onClick: (id: ApprovalActionId) => Promise<void> }) {
@@ -296,12 +309,22 @@ function TraceRow({ event }: { event: HarnessTraceEvent }) {
 }
 
 function ReproductionView({ run }: { run: DashboardRun }) {
-  return <section className="panel evidence-view"><PanelTitle eyebrow="Proof" title="Reproduction" icon={<RadioTower size={17} />} /><div className="proof-grid"><ProofBlock label="Before patch" value={run.proof?.before ?? "No before-run evidence returned."} tone="failure" /><ProofBlock label="After patch" value={run.proof?.after ?? "No after-run evidence returned."} tone="success" /><ProofBlock label="Regression suite" value={run.proof?.regressions ?? "No regression evidence returned."} tone="neutral" /></div><div className="evidence-note"><AlertTriangle size={16} /><span>Only bounded command output is shown. Private model reasoning is intentionally omitted.</span></div></section>;
+  const reproduction = run.tests[0];
+  const reproEvents = run.harness.trace.filter((event) => event.category === "sandbox" && (event.command || event.stdout || event.stderr));
+  return <section className="panel evidence-view"><PanelTitle eyebrow="Proof" title="Reproduction" icon={<RadioTower size={17} />} /><div className="proof-grid"><ProofBlock label="Before patch" value={run.proof?.before ?? "No before-run evidence returned."} tone="failure" /><ProofBlock label="After patch" value={run.proof?.after ?? "No after-run evidence returned."} tone="success" /><ProofBlock label="Regression suite" value={run.proof?.regressions ?? "No regression evidence returned."} tone="neutral" /></div><div className="reproducer-card"><div><p className="eyebrow">Generated reproducer</p><strong>{reproduction?.detail ?? "The harness has not returned a reproducer yet."}</strong></div><span className={`result-badge ${reproduction?.status ?? "pending"}`}>{reproduction?.status ?? "pending"}</span></div>{reproEvents.length ? <details className="raw-evidence"><summary><Terminal size={14} />Inspect bounded reproducer output</summary>{reproEvents.map((event) => <pre key={event.id}>{[event.command ? `$ ${event.command}` : undefined, event.stdout, event.stderr].filter(Boolean).join("\n")}</pre>)}</details> : undefined}<div className="evidence-note"><AlertTriangle size={16} /><span>Only bounded command output is shown. Private model reasoning is intentionally omitted.</span></div></section>;
 }
 
 function PatchView({ run, pullRequest }: { run: DashboardRun; pullRequest?: { number: number; url: string } }) {
   const patch = run.candidatePatch;
-  return <section className="panel evidence-view"><PanelTitle eyebrow="Candidate change" title={patch?.title ?? "No candidate patch"} icon={<FileCode2 size={17} />} />{patch ? <><div className="patch-meta"><span><GitBranch size={15} />{run.currentBranch}</span><span><Lock size={15} />{patch.hash}</span><span><Timer size={15} />verified {formatTime(patch.verifiedAt)}</span></div>{patch.body ? <div className="remedy-box"><p className="eyebrow">Proposed remedy</p><p>{patch.body}</p></div> : undefined}<div className="patch-file-heading"><p className="eyebrow">Proposed file contents</p><span>{patch.fileContents?.length ?? patch.files.length} file{patch.files.length === 1 ? "" : "s"}</span></div><ul className="file-list patch-files">{patch.files.map((file) => <li key={file}><FileCode2 size={14} />{file}</li>)}</ul>{patch.fileContents?.length ? <div className="patch-file-list">{patch.fileContents.map((file) => <details className="patch-file" key={file.path}><summary><FileCode2 size={14} />{file.path}</summary><pre className="patch-file-content">{file.content}</pre></details>)}</div> : undefined}{pullRequest ? <a className="button button-success" href={pullRequest.url} target="_blank" rel="noreferrer"><GitPullRequestArrow size={17} />Open draft PR #{pullRequest.number}<ArrowUpRight size={15} /></a> : <div className="preapproval-state"><GitCommitHorizontal size={17} /><div><strong>Write is still gated</strong><span>The candidate patch remains a proposal until approval.</span></div></div>}</> : <div className="empty-state"><FileCode2 size={22} /><p>No candidate patch has been returned by the harness.</p></div>}</section>;
+  return <section className="panel evidence-view"><PanelTitle eyebrow="Candidate change" title={patch?.title ?? "No candidate patch"} icon={<FileDiff size={17} />} />{patch ? <><div className="patch-summary"><span><strong>{patch.files.length}</strong> files changed</span><span><strong>Before</strong> {run.proof?.before ?? "verified"}</span><span><strong>After</strong> {run.proof?.after ?? "validated"}</span><span><strong>Regression</strong> {run.proof?.regressions ?? "passed"}</span></div><div className="patch-meta"><span><GitBranch size={15} />{run.currentBranch}</span><span><Lock size={15} />{patch.hash}</span><span><Timer size={15} />verified {formatTime(patch.verifiedAt)}</span></div>{run.proposedFixSummary || patch.body ? <div className="remedy-box"><p className="eyebrow">Proposed remedy</p><p>{run.proposedFixSummary ?? patch.body}</p></div> : undefined}<div className="patch-file-heading"><p className="eyebrow">Actual diff</p><span>{patch.files.length} file{patch.files.length === 1 ? "" : "s"}</span></div><ul className="file-list patch-files">{patch.files.map((file) => <li key={file}><FileCode2 size={14} />{file}</li>)}</ul>{run.patchDiff?.length ? <div className="patch-file-list">{run.patchDiff.map((file) => <details className="patch-file" key={file.path} open={run.patchDiff?.length === 1}><summary><FileCode2 size={14} />{file.path}</summary><pre className="diff-code">{unifiedDiff(file.before, file.after)}</pre></details>)}</div> : patch.fileContents?.length ? <div className="patch-file-list">{patch.fileContents.map((file) => <details className="patch-file" key={file.path}><summary><FileCode2 size={14} />{file.path} · proposed content</summary><pre className="patch-file-content">{file.content}</pre></details>)}</div> : undefined}{pullRequest ? <a className="button button-success" href={pullRequest.url} target="_blank" rel="noreferrer"><GitPullRequestArrow size={17} />Open draft PR #{pullRequest.number}<ArrowUpRight size={15} /></a> : <div className="preapproval-state"><GitCommitHorizontal size={17} /><div><strong>Write is still gated</strong><span>The candidate patch remains a proposal until approval.</span></div></div>}</> : <div className="empty-state"><FileCode2 size={22} /><p>No candidate patch has been returned by the harness.</p></div>}</section>;
+}
+
+function TestsView({ run }: { run: DashboardRun }) {
+  return <section className="panel evidence-view"><PanelTitle eyebrow="Validation" title="Tests" icon={<TestTube2 size={17} />} /><div className="test-summary-grid">{run.tests.map((test) => <article className="test-summary" key={test.id}><div><p className="eyebrow">{test.label}</p><strong>{test.detail}</strong></div><span className={`result-badge ${test.status}`}>{test.status}</span></article>)}</div><div className="raw-test-list">{run.tests.map((test) => test.log ? <details key={`${test.id}-log`}><summary><Terminal size={14} />{test.label} raw output</summary><pre>{test.log}</pre></details> : undefined)}</div></section>;
+}
+
+function ReviewView({ run, currentStatus, pullRequest, approval, approvalError, pendingAction, onApproval }: { run: DashboardRun; currentStatus: RunStatus; pullRequest?: { number: number; url: string }; approval?: ApprovalSubmission; approvalError?: string; pendingAction?: ApprovalActionId; onApproval: (actionId: ApprovalActionId) => Promise<void> }) {
+  return <section className="review-page"><div className="review-heading"><div><a className="back-link" href={run.harness.dashboardUrl ?? "/"}>← Back to run overview</a><p className="eyebrow">Maintainer review</p><h2>{run.issueTitle}</h2><p>Review the verified evidence and exact candidate change before allowing GitHub writes.</p></div><span className={`status-pill status-${statusTone(currentStatus)}`}><CircleDot size={12} />{statusLabels[currentStatus]}</span></div><div className="review-grid"><section className="panel review-proof"><PanelTitle eyebrow="Why verified" title="Evidence at a glance" icon={<ShieldCheck size={17} />} /><div className="verification-facts"><span><small>Repository</small><strong>{run.repoLabel}</strong></span><span><small>Base</small><strong>{run.baseSha ?? run.currentBranch}</strong></span><span><small>Reproduction</small><strong>{run.proof?.attempts ?? "Pending"}</strong></span><span><small>Regression</small><strong>{run.proof?.regressions ?? "Pending"}</strong></span></div><div className="finding-callout"><ShieldCheck size={20} /><div><strong>{run.rootCauseSummary ?? compactSummary(run.summary) ?? "The verified finding is being collected."}</strong><p>{run.proposedFixSummary ?? "The proposed remedy is available in the patch below."}</p></div></div></section><ApprovalPanel run={run} currentStatus={currentStatus} pullRequest={pullRequest} approval={approval} approvalError={approvalError} pendingAction={pendingAction} onApproval={onApproval} /><PatchView run={run} pullRequest={pullRequest} /><TestsView run={run} /></div></section>;
 }
 
 function SecurityView({ run }: { run: DashboardRun }) {
@@ -318,6 +341,7 @@ function statusTone(status: RunStatus): string { if (["failed", "rejected", "fix
 function formatTime(value: string): string { return new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value)); }
 function shortId(value: string): string { return value.length > 22 ? `${value.slice(0, 10)}...${value.slice(-8)}` : value; }
 function compactSummary(value?: string): string | undefined { const compact = value?.replace(/\s+/g, " ").trim(); if (!compact) return undefined; const sentence = compact.match(/^.{1,360}?(?:[.!?](?:\s|$)|$)/)?.[0] ?? compact; return sentence.length <= 380 ? sentence : `${sentence.slice(0, 377).trimEnd()}...`; }
+function unifiedDiff(before: string, after: string): string { const oldLines = before.split("\n"); const newLines = after.split("\n"); const output = [`--- base`, `+++ proposed`]; const max = Math.max(oldLines.length, newLines.length); for (let index = 0; index < max; index += 1) { const oldLine = oldLines[index]; const newLine = newLines[index]; if (oldLine === newLine && oldLine !== undefined) output.push(`  ${oldLine}`); else { if (oldLine !== undefined) output.push(`- ${oldLine}`); if (newLine !== undefined) output.push(`+ ${newLine}`); } } return output.join("\n"); }
 function progressLabelFor(status: RunStatus): string { const index = happyPathStatuses.indexOf(status); return index === -1 ? "terminal state" : `stage ${index + 1}/${happyPathStatuses.length}`; }
 function appendApprovalEvent(events: RunEvent[], status: RunStatus, approval?: ApprovalSubmission): RunEvent[] { return approval ? [...events, { id: approval.id, runId: approval.runId, at: approval.savedAt, status, message: approval.message }] : events; }
 

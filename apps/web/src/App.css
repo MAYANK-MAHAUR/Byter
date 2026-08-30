@@ -414,3 +414,51 @@ button:focus-visible, a:focus-visible, summary:focus-visible {
   .github-approval-command code { min-height: 38px; }
   .patch-file-content { max-height: 380px; }
 }
+
+/* Maintainer review route and summary-first evidence surfaces. */
+.review-page { width: min(1180px, 100%); margin: 22px auto 0; }
+.review-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 16px; }
+.review-heading h2 { margin-bottom: 6px; font-size: 1.45rem; }
+.review-heading p:not(.eyebrow) { max-width: 68ch; margin: 0; color: var(--muted); font-size: 0.86rem; line-height: 1.5; }
+.back-link { display: inline-flex; margin-bottom: 17px; color: var(--blue); font-size: 0.76rem; font-weight: 800; text-decoration: none; }
+.back-link:hover { text-decoration: underline; }
+.review-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(330px, 0.85fr); gap: 14px; align-items: start; }
+.review-grid > .evidence-view { grid-column: span 2; margin-top: 0; }
+.review-proof { padding: 18px; }
+.verification-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 0 0 15px; }
+.verification-facts span { min-width: 0; padding: 10px; border: 1px solid #b8c4d3; background: #f3f7fb; }
+.verification-facts small { display: block; margin-bottom: 5px; color: var(--muted); font-size: 0.66rem; font-weight: 800; text-transform: uppercase; }
+.verification-facts strong { display: block; color: var(--ink); font-family: var(--mono); font-size: 0.71rem; line-height: 1.35; overflow-wrap: anywhere; }
+.approval-request { display: grid; gap: 3px; margin: -4px 0 15px; padding: 11px 12px; border-left: 4px solid #1554b6; background: #eaf1ff; color: #123d82; }
+.approval-request strong { font-size: 0.78rem; }
+.approval-request span { color: #355b92; font-size: 0.73rem; line-height: 1.4; }
+.reproducer-card { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-top: 15px; padding: 14px; border: 2px solid #b8c4d3; background: #f8fbfe; }
+.reproducer-card strong { display: block; max-width: 72ch; color: var(--ink); font-size: 0.82rem; line-height: 1.45; }
+.result-badge { display: inline-flex; min-width: 66px; justify-content: center; padding: 4px 7px; border: 1px solid #b8c4d3; color: var(--muted); font-family: var(--mono); font-size: 0.64rem; font-weight: 800; text-transform: uppercase; }
+.result-badge.passed { border-color: #5ab89e; background: #e5f6f1; color: #05604f; }
+.result-badge.failed { border-color: #e08a81; background: #fff0ee; color: #9b2118; }
+.result-badge.pending { border-color: #e1ae62; background: #fff3df; color: #874600; }
+.raw-evidence, .raw-test-list details { margin-top: 13px; border: 1px solid #b8c4d3; background: #f8fbfe; }
+.raw-evidence summary, .raw-test-list summary { display: flex; align-items: center; gap: 7px; padding: 10px 11px; color: var(--blue); font-size: 0.74rem; font-weight: 800; }
+.raw-evidence pre, .raw-test-list pre { max-height: 360px; margin: 0; overflow: auto; padding: 12px; border-top: 1px solid #b8c4d3; background: #10243d; color: #e6f1ff; font-family: var(--mono); font-size: 0.68rem; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.patch-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 15px; }
+.patch-summary span { min-width: 0; padding: 10px; border: 1px solid #b8c4d3; background: #f3f7fb; color: var(--muted); font-size: 0.71rem; line-height: 1.4; overflow-wrap: anywhere; }
+.patch-summary strong { display: block; margin-bottom: 3px; color: var(--ink); font-size: 0.72rem; }
+.diff-code { max-height: 520px; margin: 0; overflow: auto; padding: 12px; border-top: 1px solid #3f638b; background: #10243d; color: #e6f1ff; font-family: var(--mono); font-size: 0.69rem; line-height: 1.52; white-space: pre; }
+.test-summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.test-summary { display: flex; min-height: 116px; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 13px; border: 1px solid #b8c4d3; background: #f8fbfe; }
+.test-summary strong { display: block; color: var(--ink); font-size: 0.79rem; line-height: 1.45; }
+.test-summary .result-badge { flex: 0 0 auto; }
+.raw-test-list { margin-top: 13px; }
+.raw-test-list details:first-child { margin-top: 0; }
+
+@media (max-width: 1120px) {
+  .review-grid { grid-template-columns: 1fr; }
+  .review-grid > .evidence-view { grid-column: auto; }
+}
+
+@media (max-width: 760px) {
+  .review-page { margin-top: 17px; }
+  .review-heading { align-items: flex-start; flex-direction: column; gap: 10px; }
+  .verification-facts, .patch-summary, .test-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

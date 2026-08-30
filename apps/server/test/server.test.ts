@@ -243,7 +243,7 @@ describe("ReproSmith production server", () => {
       expect(JSON.stringify(latest)).not.toContain("do-not-persist");
       expect(githubClient.createIssueComment).toHaveBeenCalledTimes(2);
       expect(githubClient.createIssueComment.mock.calls[1]?.[3]).toContain("No genuine proof contract was returned");
-      expect(githubClient.addLabels).not.toHaveBeenCalled();
+      expect(githubClient.addLabels).toHaveBeenCalledWith("o", "r", 20, ["reprosmith:triaging"]);
       await expect(readFile(join(liveDataDir, "webhook-runs.jsonl"), "utf8")).resolves.toContain("session-live-1");
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
@@ -458,7 +458,7 @@ describe("ReproSmith production server", () => {
     const githubClient = {
       createIssueComment: vi.fn().mockResolvedValue({ id: 700, html_url: "https://github.test/issues/21#issuecomment-700" }),
       addLabels: vi.fn().mockResolvedValue(undefined),
-      updateIssueComment: vi.fn()
+      updateIssueComment: vi.fn().mockImplementation(async (_owner: string, _repo: string, id: number) => ({ id, html_url: "https://github.test/issues/21#issuecomment-700" }))
     } as any;
     const server = createReproSmithServer({ staticDir, dataDir: liveDataDir, trueForgeRuntime, githubTools, githubClient });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -501,14 +501,16 @@ describe("ReproSmith production server", () => {
       }
       expect(latest.run.status).toBe("awaiting-approval");
       expect(latest.trueForge.result.candidatePatch.files[0].path).toBe("src/parser.ts");
-      expect(latest.githubComments).toHaveLength(2);
+      expect(latest.githubComments).toHaveLength(1);
       expect(latest.verifiedLabel.name).toBe("reprosmith:verified");
-      expect(githubClient.createIssueComment).toHaveBeenCalledTimes(2);
-      expect(githubClient.createIssueComment.mock.calls[1]?.[3]).toContain("### Proposed remedy");
-      expect(githubClient.createIssueComment.mock.calls[1]?.[3]).toContain("`reprosmith:verified` added");
-      expect(githubClient.createIssueComment.mock.calls[1]?.[3]).toContain("```text\napprove\n```");
-      expect(githubClient.createIssueComment.mock.calls[1]?.[3]).toContain("src/parser.ts");
-      expect(githubClient.updateIssueComment).not.toHaveBeenCalled();
+      expect(githubClient.createIssueComment).toHaveBeenCalledTimes(1);
+      expect(githubClient.createIssueComment.mock.calls[0]?.[3]).toContain("## ReproSmith · Investigating");
+      expect(githubClient.createIssueComment.mock.calls[0]?.[3]).not.toContain("approve");
+      expect(githubClient.updateIssueComment).toHaveBeenCalledTimes(1);
+      expect(githubClient.updateIssueComment.mock.calls[0]?.[3]).toContain("### Proposed fix");
+      expect(githubClient.updateIssueComment.mock.calls[0]?.[3]).toContain("Review evidence & approve patch");
+      expect(githubClient.updateIssueComment.mock.calls[0]?.[3]).toContain("src/parser.ts");
+      expect(githubClient.updateIssueComment.mock.calls[0]?.[3]).not.toContain("export const fixed = true;");
       expect(githubClient.addLabels).toHaveBeenCalledWith("o", "r", 21, ["reprosmith:verified"]);
       expect(githubClient.addLabels).toHaveBeenCalledWith("o", "r", 21, ["reprosmith:awaiting-approval"]);
       const runRecord = await fetch(`${isolatedBaseUrl}/api/runs/${encodeURIComponent(latest.run.id)}`).then((runResponse) => runResponse.json());
@@ -558,8 +560,10 @@ describe("ReproSmith production server", () => {
       const finalRun = await fetch(`${isolatedBaseUrl}/api/runs/latest`).then((latestResponse) => latestResponse.json());
       expect(finalRun.run.status).toBe("pr-created");
       expect(finalRun.trueForge.result.pullRequest).toEqual({ number: 42, url: "https://github.test/pull/42" });
-      expect(githubClient.createIssueComment).toHaveBeenCalledTimes(3);
-      expect(githubClient.createIssueComment.mock.calls.at(-1)?.[3]).toContain("Draft PR created");
+      expect(githubClient.createIssueComment).toHaveBeenCalledTimes(1);
+      expect(githubClient.updateIssueComment).toHaveBeenCalledTimes(2);
+      expect(githubClient.updateIssueComment.mock.calls.at(-1)?.[3]).toContain("Fix proposed");
+      expect(githubClient.updateIssueComment.mock.calls.at(-1)?.[3]).not.toContain("awaiting");
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     }

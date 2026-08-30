@@ -74,6 +74,10 @@ interface LiveCandidatePatch {
 interface LiveProofResult {
   status: "patch-ready" | "verified" | "not-reproduced" | "blocked" | "failed";
   summary: string;
+  rootCauseSummary?: string;
+  proposedFixSummary?: string;
+  baseSha?: string;
+  patchDiff?: Array<{ path: string; before: string; after: string }>;
   proof?: {
     before?: string;
     after?: string;
@@ -126,6 +130,7 @@ interface PersistedWebhookRunRecord {
   githubComments?: Array<{ id?: number; url: string; kind: GitHubCommentKind; createdAt: string }>;
   verifiedLabel?: { name: "reprosmith:verified"; appliedAt?: string; error?: string };
   approvalLabel?: { name: "reprosmith:awaiting-approval"; appliedAt?: string; error?: string };
+  lifecycleLabels?: Array<{ name: string; appliedAt?: string; error?: string }>;
   run: ReturnType<typeof createRun>;
   scan: ReturnType<typeof scanIssueText>;
   trueForge: {
@@ -325,7 +330,8 @@ async function handleGitHubWebhook(
     trueForge: orchestration.trueForge
   };
   await mkdir(dataDir, { recursive: true });
-  const commentRecord = await appendGitHubComment(record, githubClient, "started");
+  const labeledRecord = await syncLifecycleLabels(record, githubClient);
+  const commentRecord = await appendGitHubComment(labeledRecord, githubClient, "started");
   await appendFile(join(dataDir, "webhook-runs.jsonl"), `${JSON.stringify(commentRecord)}\n`, "utf8");
   if (orchestration.trueForge.status === "started" && trueForgeRuntime?.subscribeToTurn) {
     void monitorTrueForgeTurn(dataDir, commentRecord, trueForgeRuntime, githubClient);
@@ -765,7 +771,8 @@ async function executeApproval(
     const cleanedRecord = actionId === "reject-run"
       ? await removeAwaitingApprovalLabel(baseRecord, githubClient)
       : baseRecord;
-    const updatedRecord = await appendGitHubComment(cleanedRecord, githubClient, "approval");
+    const statusLabeledRecord = await syncLifecycleLabels(cleanedRecord, githubClient);
+    const updatedRecord = await appendGitHubComment(statusLabeledRecord, githubClient, "approval");
     await appendUpdatedLiveRecord(dataDir, updatedRecord);
     return { statusCode: 200, body: receipt };
   }
@@ -853,7 +860,8 @@ async function executeApproval(
     }
   };
   const cleanedRecord = await removeAwaitingApprovalLabel(updatedRecord, githubClient);
-  const commentedRecord = await appendGitHubComment(cleanedRecord, githubClient, "approval");
+  const statusLabeledRecord = await syncLifecycleLabels(cleanedRecord, githubClient);
+  const commentedRecord = await appendGitHubComment(statusLabeledRecord, githubClient, "approval");
   await appendUpdatedLiveRecord(dataDir, commentedRecord);
   const receipt = buildApprovalReceipt(
     runId,
@@ -911,6 +919,66 @@ async function appendApprovalReceipt(dataDir: string, receipt: ApprovalReceipt):
 async function appendUpdatedLiveRecord(dataDir: string, record: PersistedWebhookRunRecord): Promise<void> {
   await mkdir(dataDir, { recursive: true });
   await appendFile(join(dataDir, "webhook-runs.jsonl"), `${JSON.stringify(record)}\n`, "utf8");
+}
+
+const lifecycleLabelDefinitions = [
+  { name: "reprosmith:triaging", color: "1d5fd1", description: "ReproSmith is triaging this issue" },
+  { name: "reprosmith:needs-info", color: "a85b00", description: "ReproSmith needs more issue information" },
+  { name: "reprosmith:not-reproduced", color: "6e7781", description: "ReproSmith could not reproduce this issue" },
+  { name: "reprosmith:security-review", color: "b42318", description: "ReproSmith held this issue for security review" },
+  { name: "reprosmith:pr-created", color: "1a7f37", description: "ReproSmith created a draft pull request" }
+] as const;
+
+function desiredLifecycleLabels(record: PersistedWebhookRunRecord): string[] {
+  if (!record.scan.safeToExecute) return ["reprosmith:security-review"];
+  if (record.run.status === "pr-created") return ["reprosmith:pr-created"];
+  if (record.run.status === "awaiting-approval") return [];
+  if (record.run.status === "needs-info") return ["reprosmith:needs-info"];
+  if (record.run.status === "not-reproduced") return ["reprosmith:not-reproduced"];
+  if (record.run.status === "triaging" || record.trueForge.status === "started") return ["reprosmith:triaging"];
+  return [];
+}
+
+async function syncLifecycleLabels(
+  record: PersistedWebhookRunRecord,
+  githubClient: GitHubRestClientLike | undefined
+): Promise<PersistedWebhookRunRecord> {
+  if (!githubClient) return record;
+  const desired = desiredLifecycleLabels(record);
+  const owner = record.run.issue.owner;
+  const repo = record.run.issue.repo;
+  const issueNumber = record.run.issue.issueNumber;
+  const applied: Array<{ name: string; appliedAt?: string; error?: string }> = [];
+
+  for (const labelName of desired) {
+    const definition = lifecycleLabelDefinitions.find((label) => label.name === labelName);
+    if (!definition) continue;
+    try {
+      try {
+        await githubClient.updateLabel?.(owner, repo, definition.name, definition.color, definition.description);
+      } catch {
+        if (!githubClient.createLabel) throw new Error("GitHub label is unavailable");
+        await githubClient.createLabel(owner, repo, definition.name, definition.color, definition.description);
+      }
+      await githubClient.addLabels(owner, repo, issueNumber, [definition.name]);
+      applied.push({ name: definition.name, appliedAt: new Date().toISOString() });
+    } catch {
+      applied.push({ name: definition.name, error: "GitHub did not accept the lifecycle label request" });
+    }
+  }
+
+  if (githubClient.removeLabel) {
+    for (const definition of lifecycleLabelDefinitions) {
+      if (desired.includes(definition.name)) continue;
+      try {
+        await githubClient.removeLabel(owner, repo, issueNumber, definition.name);
+      } catch {
+        // A missing label is already in the desired state.
+      }
+    }
+  }
+
+  return { ...record, lifecycleLabels: applied };
 }
 
 async function applyVerifiedLabel(
@@ -1042,6 +1110,29 @@ async function appendGitHubComment(
 
   const body = buildGitHubStatusComment(record, kind);
   try {
+    if (record.githubStatusComment?.id !== undefined && githubClient.updateIssueComment) {
+      const updated = await githubClient.updateIssueComment(
+        record.run.issue.owner,
+        record.run.issue.repo,
+        record.githubStatusComment.id,
+        body
+      );
+      return {
+        ...record,
+        githubComments: (record.githubComments ?? [{
+          id: record.githubStatusComment.id,
+          url: record.githubStatusComment.url,
+          kind: "started",
+          createdAt: record.receivedAt
+        }]).map((comment) => comment.id === record.githubStatusComment?.id
+          ? { ...comment, kind, url: updated.html_url ?? comment.url }
+          : comment),
+        githubStatusComment: {
+          id: updated.id ?? record.githubStatusComment.id,
+          url: updated.html_url ?? record.githubStatusComment.url
+        }
+      };
+    }
     const created = await githubClient.createIssueComment(
       record.run.issue.owner,
       record.run.issue.repo,
@@ -1056,7 +1147,7 @@ async function appendGitHubComment(
     };
     return {
       ...record,
-      githubComments: [...(record.githubComments ?? []), comment],
+      githubComments: [comment],
       githubStatusComment: {
         ...(created.id !== undefined ? { id: created.id } : {}),
         url: created.html_url
@@ -1068,107 +1159,83 @@ async function appendGitHubComment(
   }
 }
 
-function buildGitHubStatusComment(record: PersistedWebhookRunRecord, kind: GitHubCommentKind): string {
+export function buildGitHubStatusComment(record: PersistedWebhookRunRecord, kind: GitHubCommentKind): string {
   const status = githubCommentStatus(record);
   const result = record.trueForge.result;
   const pullRequest = result?.pullRequest;
-  const comments = record.githubComments ?? [];
+  const reviewUrl = record.dashboardUrl ? `${record.dashboardUrl.replace(/\/$/, "")}/review` : "#";
   const lines = [
     `<!-- reprosmith-run:${record.run.id} -->`,
-    `## ReproSmith: ${status.label}`,
+    `## ReproSmith · ${status.label}`,
     "",
-    `**Issue:** #${record.run.issue.issueNumber} ${safeCommentText(record.issueTitle, 300)}`,
-    `**Run:** \`${record.run.id}\``,
-    `**Dashboard:** [Open the permanent run dashboard](${record.dashboardUrl ?? "#"})`,
-    `**TrueForge:** ${record.trueForge.session?.id ? `session \`${record.trueForge.session.id}\`` : "session pending"}${record.trueForge.turn?.id ? `, turn \`${record.trueForge.turn.id}\`` : ""}`,
-    `**Update:** ${commentUpdateLabel(kind)}${comments.length > 0 ? ` (update ${comments.length + 1})` : ""}`,
+    `Issue #${record.run.issue.issueNumber}: ${safeCommentText(record.issueTitle, 240)}`,
+    `**Status:** ${status.detail}`,
     "",
-    `> ${safeCommentText(status.detail, 1_000)}`
+    `[Open ReproSmith run →](${record.dashboardUrl ?? "#"})`
   ];
 
-  if (result?.summary) {
-    lines.push("", "### Finding", safeCommentText(result.summary, 1_200));
-  }
-  if (result?.proof) {
+  if (result?.candidatePatch && hasGenuineProof(result)) {
     lines.push(
       "",
       "### Evidence",
-      "<details>",
-      "<summary>Expand proof details</summary>",
+      "| Check | Result |",
+      "| --- | --- |",
+      `| Reproduction | ${safeCommentText(result.proof?.attempts ?? "Verified", 180)} |`,
+      `| Before / after | ${safeCommentText(result.proof?.before ?? "Observed", 260)} → ${safeCommentText(result.proof?.after ?? "Validated", 260)} |`,
+      `| Regression suite | ${safeCommentText(result.proof?.regressions ?? "Verified", 260)} |`,
       "",
-      ...[
-        result.proof.attempts ? `- **Attempts:** ${safeCommentText(result.proof.attempts, 300)}` : undefined,
-        result.proof.before ? `- **Before:** ${safeCommentText(result.proof.before, 1_200)}` : undefined,
-        result.proof.after ? `- **After:** ${safeCommentText(result.proof.after, 1_200)}` : undefined,
-        result.proof.regressions ? `- **Regression suite:** ${safeCommentText(result.proof.regressions, 1_200)}` : undefined
-      ].filter((line): line is string => line !== undefined),
+      "### Root cause",
+      safeCommentText(result.rootCauseSummary ?? summarizeCommentText(result.summary), 520),
       "",
-      "</details>"
-    );
-  }
-  if (result?.candidatePatch) {
-    lines.push(
+      "### Proposed fix",
+      safeCommentText(result.proposedFixSummary ?? summarizeCommentText(result.candidatePatch.body), 520),
       "",
-      "### Proposed remedy",
-      safeCommentText(result.candidatePatch.body, 2_500),
-      "",
-      "### Candidate patch",
-      `- **Patch hash:** \`${result.candidatePatch.hash}\``,
-      `- **Files:** ${result.candidatePatch.files.length}`,
-      `- **Verification label:** ${record.verifiedLabel?.appliedAt ? "`reprosmith:verified` added" : record.verifiedLabel?.error ? "could not be added" : "pending"}`,
-      `- **Approval label:** ${record.approvalLabel?.appliedAt ? "`reprosmith:awaiting-approval` added" : record.approvalLabel?.error ? "could not be added" : "not applicable"}`,
-      "",
-      formatGitHubPatchFiles(result.candidatePatch.files),
-      ""
+      `**Patch:** ${result.candidatePatch.files.length} file${result.candidatePatch.files.length === 1 ? "" : "s"} · review on the dashboard before approval`,
+      `**Files:** ${result.candidatePatch.files.map((file) => `\`${safeCommentText(file.path, 180)}\``).join(", ")}`
     );
     if (record.run.status === "awaiting-approval") {
       lines.push(
-        "### Approve this exact patch",
-        "Review the proposed file contents above, then post this as a new issue comment:",
         "",
-        "```text\napprove\n```",
+        "> ⏸ **TrueForge is paused. No branch, commit, or pull request has been created.**",
         "",
-        "Only a repository maintainer can approve. This selects the newest awaiting patch for this issue, then verifies its stored hash before creating a draft pull request. No branch or PR exists before that check passes."
+        `**[Review evidence & approve patch →](${reviewUrl})**`
       );
     }
   } else if (record.run.status === "failed") {
     lines.push(
       "",
-      "### Next step",
-      "No genuine proof contract was returned. No verified label or repository mutation was made."
+      "> No genuine proof contract was returned. No verified label or repository mutation was made.",
+      "",
+      "Review the run for bounded failure details."
     );
   }
   if (pullRequest) {
-    lines.push("", `**Draft PR:** [#${pullRequest.number}](${pullRequest.url})`);
+    lines.push(
+      "",
+      "### Validation complete",
+      "- ✅ Issue verified",
+      "- ✅ Candidate patch validated",
+      "- ✅ Maintainer approved",
+      `- ✅ Draft PR created: [#${pullRequest.number}](${pullRequest.url})`,
+      "",
+      `**[View verification evidence →](${record.dashboardUrl ?? "#"})**`
+    );
   }
+
+  lines.push(
+    "",
+    "<details>",
+    "<summary>Technical details</summary>",
+    "",
+    `Run: \`${safeCommentText(record.run.id, 180)}\``,
+    `Base branch: \`${safeCommentText(record.baseBranch, 120)}\``,
+    ...(result?.candidatePatch ? [`Patch hash: \`${result.candidatePatch.hash}\``] : []),
+    ...(record.trueForge.session?.id ? [`TrueForge session: \`${safeCommentText(record.trueForge.session.id, 180)}\``] : []),
+    "",
+    "</details>"
+  );
 
   return lines.join("\n");
-}
-
-function formatGitHubPatchFiles(files: Array<{ path: string; content: string }>): string {
-  const maxFiles = 8;
-  const maxTotalBytes = 40_000;
-  let totalBytes = 0;
-  const fileSections: string[] = [];
-  for (const file of files.slice(0, maxFiles)) {
-    const content = safeCodeText(file.content, 8_000);
-    const sectionBytes = Buffer.byteLength(content, "utf8");
-    if (totalBytes + sectionBytes > maxTotalBytes) break;
-    totalBytes += sectionBytes;
-    fileSections.push(`#### \`${safeCommentText(file.path, 240)}\``, "", "````text", content, "````", "");
-  }
-  const includedFiles = Math.floor(fileSections.length / 6);
-  const sections: string[] = [
-    "<details>",
-    `<summary>View proposed file contents (${includedFiles} of ${files.length})</summary>`,
-    "",
-    ...fileSections
-  ];
-  if (includedFiles < files.length) {
-    sections.push("Additional file contents are available in the permanent dashboard.", "");
-  }
-  sections.push("</details>");
-  return sections.join("\n");
 }
 
 function safeCommentText(value: string, maxBytes: number): string {
@@ -1195,12 +1262,18 @@ function commentUpdateLabel(kind: GitHubCommentKind): string {
   return "Maintainer decision recorded";
 }
 
+function summarizeCommentText(value: string): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  const first = compact.match(/^.{1,460}?(?:[.!?](?:\s|$)|$)/)?.[0] ?? compact;
+  return clampText(first, 520);
+}
+
 function githubCommentStatus(record: PersistedWebhookRunRecord): { label: string; detail: string } {
   if (record.run.status === "pr-created") {
-    return { label: "Draft PR created", detail: "The approved candidate patch was written as a draft pull request." };
+    return { label: "Fix proposed", detail: "Approved patch validated; draft pull request created." };
   }
   if (record.run.status === "awaiting-approval") {
-    return { label: "Awaiting maintainer approval", detail: "Proof is complete. No branch or pull request has been created." };
+    return { label: "Patch ready for review", detail: "Verified evidence is ready; TrueForge is paused before GitHub writes." };
   }
   if (record.run.status === "rejected") {
     return { label: "Run rejected", detail: "The run was stopped before repository mutation." };
@@ -1209,7 +1282,7 @@ function githubCommentStatus(record: PersistedWebhookRunRecord): { label: string
     return { label: "Run failed", detail: record.trueForge.error ?? "TrueForge did not complete successfully." };
   }
   if (record.trueForge.status === "started") {
-    return { label: "Investigation in progress", detail: "TrueForge is inspecting the issue and collecting executable evidence." };
+    return { label: "Investigating", detail: "TrueForge is inspecting the issue and collecting executable evidence." };
   }
   return { label: "Investigation queued", detail: "ReproSmith accepted the signed issue and is preparing the investigation." };
 }
@@ -1563,6 +1636,9 @@ async function monitorTrueForgeTurn(
 
     let completed = events.some((event) => event.type === "turn.done");
     let result = completed ? extractLiveProofResult(events, record) : undefined;
+    if (result) {
+      result = await hydratePatchEvidence(result, record, githubClient);
+    }
     if (completed && !result && trueForgeRuntime.listSessionEvents) {
       try {
         const persistedEvents = await trueForgeRuntime.listSessionEvents(record.trueForge.session.id);
@@ -1572,6 +1648,9 @@ async function monitorTrueForgeTurn(
             await persistTraceEvent(event);
           }
           result = extractLiveProofResult(events, record);
+          if (result) {
+            result = await hydratePatchEvidence(result, record, githubClient);
+          }
         }
       } catch (error) {
         console.error("TrueForge persisted event refresh failed", error);
@@ -1598,6 +1677,9 @@ async function monitorTrueForgeTurn(
         events = [...events, ...recoveryEvents];
         completed = events.some((event) => event.type === "turn.done");
         result = completed ? extractLiveProofResult(events, record) : undefined;
+        if (result) {
+          result = await hydratePatchEvidence(result, record, githubClient);
+        }
       } catch (error) {
         console.error("TrueForge proof contract recovery failed", error);
       }
@@ -1627,10 +1709,11 @@ async function monitorTrueForgeTurn(
         ...(result ? { result } : {})
       }
     };
-    const labeledRecord = result ? await applyVerifiedLabel(completedRecord, githubClient) : completedRecord;
+    const labeledRecord = await syncLifecycleLabels(completedRecord, githubClient);
+    const verifiedRecord = result ? await applyVerifiedLabel(labeledRecord, githubClient) : labeledRecord;
     const approvalLabeledRecord = result
-      ? await applyAwaitingApprovalLabel(labeledRecord, githubClient)
-      : labeledRecord;
+      ? await applyAwaitingApprovalLabel(verifiedRecord, githubClient)
+      : verifiedRecord;
     const commentedRecord = await appendGitHubComment(approvalLabeledRecord, githubClient, result ? "completed" : "failed");
     await appendUpdatedLiveRecord(dataDir, commentedRecord);
   } catch (error) {
@@ -1914,8 +1997,67 @@ function extractLiveProofResult(events: TrueForgeRuntimeEvent[], record: Persist
   return {
     status: candidatePatch ? "patch-ready" : status,
     summary,
+    rootCauseSummary: clampText(
+      typeof parsed.rootCauseSummary === "string" ? parsed.rootCauseSummary : summarizeCommentText(summary),
+      520
+    ),
+    proposedFixSummary: clampText(
+      typeof parsed.proposedFixSummary === "string"
+        ? parsed.proposedFixSummary
+        : candidatePatch
+          ? summarizeCommentText(candidatePatch.body)
+          : "No candidate fix was proposed because the proof was incomplete.",
+      520
+    ),
     ...(proof && Object.keys(proof).length > 0 ? { proof } : {}),
     ...(candidatePatch ? { candidatePatch } : {})
+  };
+}
+
+async function hydratePatchEvidence(
+  result: LiveProofResult,
+  record: PersistedWebhookRunRecord,
+  githubClient: GitHubRestClientLike | undefined
+): Promise<LiveProofResult> {
+  if (!result.candidatePatch || !githubClient || typeof githubClient.getFile !== "function") {
+    return result;
+  }
+
+  const diffs: Array<{ path: string; before: string; after: string }> = [];
+  for (const file of result.candidatePatch.files) {
+    try {
+      const source = await githubClient.getFile(
+        record.run.issue.owner,
+        record.run.issue.repo,
+        file.path,
+        result.candidatePatch.baseBranch
+      );
+      const before = source.encoding.toLowerCase() === "base64"
+        ? Buffer.from(source.content.replace(/\s+/g, ""), "base64").toString("utf8")
+        : source.content;
+      diffs.push({ path: file.path, before, after: file.content });
+    } catch (error) {
+      console.warn(`Could not load base content for ${file.path}`, error);
+    }
+  }
+
+  let baseSha: string | undefined;
+  if (typeof githubClient.getBranch === "function") {
+    try {
+      baseSha = (await githubClient.getBranch(
+        record.run.issue.owner,
+        record.run.issue.repo,
+        result.candidatePatch.baseBranch
+      )).commit.sha;
+    } catch {
+      baseSha = undefined;
+    }
+  }
+
+  return {
+    ...result,
+    ...(baseSha ? { baseSha } : {}),
+    ...(diffs.length > 0 ? { patchDiff: diffs } : {})
   };
 }
 
