@@ -167,6 +167,50 @@ describe("Byter production server", () => {
     expect(await lifecycleLabelResponse.json()).toMatchObject({ ignored: true });
   });
 
+  it("deduplicates opened and labeled deliveries for the same issue trigger", async () => {
+    process.env.BYTER_REQUIRE_TRIGGER_LABEL = "true";
+    const issue = {
+      number: 19,
+      title: "Parser loses escaped character case",
+      body: "An escaped uppercase character is lowercased.",
+      html_url: "https://github.test/o/r/issues/19",
+      labels: [{ name: "byter:run" }]
+    };
+    const repository = { name: "r", full_name: "o/r", default_branch: "main", owner: { login: "o" } };
+    const sendWebhook = async (action: "opened" | "labeled", deliveryId: string) => {
+      const payload = JSON.stringify({
+        action,
+        ...(action === "labeled" ? { label: { name: "byter:run" } } : {}),
+        issue,
+        repository
+      });
+      return fetch(`${baseUrl}/api/github/webhook`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-GitHub-Event": "issues",
+          "X-GitHub-Delivery": deliveryId,
+          "X-Hub-Signature-256": signWebhookPayload(payload, "webhook-secret")
+        },
+        body: payload
+      });
+    };
+
+    const openedResponse = await sendWebhook("opened", "delivery-opened-19");
+    expect(openedResponse.status).toBe(202);
+    expect((await openedResponse.json()).ignored).not.toBe(true);
+
+    const labeledResponse = await sendWebhook("labeled", "delivery-labeled-19");
+    expect(labeledResponse.status).toBe(202);
+    await expect(labeledResponse.json()).resolves.toEqual({
+      ignored: true,
+      reason: "Duplicate issue trigger"
+    });
+
+    const persisted = (await readFile(join(dataDir, "webhook-runs.jsonl"), "utf8")).trim().split("\n");
+    expect(persisted).toHaveLength(1);
+  });
+
   it("starts a TrueForge session for safe signed GitHub issue webhooks", async () => {
     const staticDir = await mkdtemp(join(tmpdir(), "byter-static-"));
     const liveDataDir = await mkdtemp(join(tmpdir(), "byter-data-"));
