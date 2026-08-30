@@ -16,8 +16,6 @@ const reproSmithResultSchema = {
           enum: ["patch-ready", "verified", "not-reproduced", "blocked", "failed"]
         },
         summary: { type: "string" },
-        rootCauseSummary: { type: "string" },
-        proposedFixSummary: { type: "string" },
         proof: {
           type: "object",
           additionalProperties: false,
@@ -81,7 +79,7 @@ export function buildReproSmithAgentSpec(config: TrueForgeRuntimeConfig) {
       "Require human approval before any GitHub write.",
       "Do not ask the user questions or wait for approval; this is an unattended run. If evidence is incomplete, finish with a blocked or failed result instead.",
       "Stop and report evidence when execution is blocked by security policy.",
-      "When the work is complete, first call the read-only submit_reprosmith_result MCP tool with exactly one object containing kind=\"reprosmith.result\", status (patch-ready, verified, not-reproduced, blocked, or failed), summary, concise rootCauseSummary, concise proposedFixSummary, proof (before, after, regressions, and attempts), and candidatePatch. Keep rootCauseSummary and proposedFixSummary to 1-2 sentences each for the maintainer review. This tool call is the authoritative handoff and does not mutate GitHub. Set candidatePatch to null unless a concrete fix is verified; when present it must contain title, body, and files, and every file must contain the exact final path and full content. Then return the same object as the final model message with no fence or prose. Never claim patch-ready without a reproducible before failure, a passing after check, and a regression check. After those checks pass, stop; do not rerun successful commands merely to improve output formatting. Do not call GitHub write tools; stop before mutation."
+      "When the work is complete, first call the read-only submit_reprosmith_result MCP tool with exactly one object containing kind=\"reprosmith.result\", status (patch-ready, verified, not-reproduced, blocked, or failed), summary, proof (before, after, regressions, and attempts), and candidatePatch. This tool call is the authoritative handoff and does not mutate GitHub. Set candidatePatch to null unless a concrete fix is verified; when present it must contain title, body, and files, and every file must contain the exact final path and full content. Then return the same object as the final model message with no fence or prose. Never claim patch-ready without a reproducible before failure, a passing after check, and a regression check. After those checks pass, stop; do not rerun successful commands merely to improve output formatting. Do not call GitHub write tools; stop before mutation."
     ].join("\n"),
     config: {
       iterationLimit: 64,
@@ -133,7 +131,7 @@ export function buildInitialUserMessage(input: StartReproSmithSessionInput): str
     "8. Prepare a complete candidatePatch with exact final file contents if the fix is verified.",
     "9. Pause before any GitHub mutation.",
     "10. Call the read-only submit_reprosmith_result MCP tool with exactly one JSON object using this shape; then finish with the same object as the final response (do not wrap it in markdown):",
-    '{"kind":"reprosmith.result","status":"patch-ready","summary":"...","rootCauseSummary":"One or two concise sentences.","proposedFixSummary":"One or two concise sentences.","proof":{"before":"...","after":"...","regressions":"...","attempts":"3/3"},"candidatePatch":{"title":"...","body":"...","files":[{"path":"src/file.ts","content":"full file content"}]}}',
+    '{"kind":"reprosmith.result","status":"patch-ready","summary":"...","proof":{"before":"...","after":"...","regressions":"...","attempts":"3/3"},"candidatePatch":{"title":"...","body":"...","files":[{"path":"src/file.ts","content":"full file content"}]}}',
     "Use status=not-reproduced, blocked, or failed and set candidatePatch to null when proof is incomplete."
   ].join("\n");
 }
