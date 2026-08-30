@@ -14,7 +14,8 @@ APPROVAL_TOKEN=<secret>
 MCP_AUTH_TOKEN=<secret>
 MCP_PUBLIC_URL=https://<railway-domain>
 MODEL_PROVIDER=agentrouter
-MODEL_NAME=gpt-5.6-sol
+# TrueForge's configured agent name for model ID gpt-5.6-sol.
+MODEL_NAME=gpt-5-6-sol
 MODEL_BASE_URL=https://agentrouter.org/v1
 MODEL_API_KEY=<secret>
 GITHUB_TOKEN=<GitHub installation token or scoped token>
