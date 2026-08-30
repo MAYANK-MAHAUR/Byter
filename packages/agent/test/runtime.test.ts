@@ -64,6 +64,7 @@ describe("ReproSmith TrueForge runtime", () => {
     expect(message).toContain("Require the same target failure 3/3");
     expect(buildReproSmithAgentSpec(config).instructions).toContain("node-v22.14.0-linux-x64.tar.gz");
     expect(buildReproSmithAgentSpec(config).instructions).toContain("submit_reprosmith_result");
+    expect(buildReproSmithAgentSpec(config).instructions).toContain("never paste repository source or test contents into base64 blobs");
   });
 
   it("creates a session and first turn through the TrueForge SDK shape", async () => {
