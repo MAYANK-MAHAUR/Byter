@@ -911,6 +911,157 @@ describe("Byter production server", () => {
     expect(oversized.status).toBe(413);
   });
 
+  it("reconciles session events across transient listing errors and recovers the approval write", async () => {
+    const staticDir = await mkdtemp(join(tmpdir(), "byter-static-"));
+    const liveDataDir = await mkdtemp(join(tmpdir(), "byter-data-"));
+    await writeFile(join(staticDir, "index.html"), "<main>Byter</main>", "utf8");
+    const proofText = JSON.stringify({
+      kind: "byter.result",
+      status: "patch-ready",
+      summary: "Reproduced 3/3 and passed the regression check.",
+      proof: { before: "3/3 failed", after: "3/3 passed", regressions: "passed", attempts: "3/3" },
+      candidatePatch: {
+        title: "Fix parser crash",
+        body: "Verified by Byter.",
+        baseBranch: "main",
+        files: [{ path: "src/parser.ts", content: "export const fixed = true;\n" }]
+      }
+    });
+    const writeArguments = {
+      owner: "o",
+      repo: "r",
+      baseBranch: "main",
+      branchName: `byter/fix-55-${createHash("sha256").update("delivery-reconcile-55").digest("hex").slice(0, 10)}`,
+      title: "Fix parser crash",
+      body: "Verified by Byter.",
+      files: [{ path: "src/parser.ts", content: "export const fixed = true;\n" }]
+    };
+    const pauseEvents = [
+      { sequenceNumber: 1, type: "model.message.delta", raw: { event: {
+        type: "model.message.delta",
+        content: `Proof complete:\n\`\`\`json\n${proofText}\n\`\`\``
+      } } },
+      { sequenceNumber: 2, type: "model.message", raw: { event: {
+        id: "event-write-55",
+        type: "model.message",
+        toolCalls: [{
+          id: "call-write-55",
+          type: "function",
+          function: { name: "create_fix_pull_request", arguments: JSON.stringify(writeArguments) }
+        }]
+      } } },
+      { sequenceNumber: 3, type: "tool.approval_required", raw: { event: {
+        id: "event-approval-55",
+        type: "tool.approval_required",
+        threadId: "thread-write-55",
+        toolCalls: [{ id: "call-write-55", sourceEventId: "event-write-55" }]
+      } } }
+    ];
+    const writeResponseEvent = { sequenceNumber: 4, type: "tool.response", raw: { event: {
+      id: "event-response-55",
+      type: "tool.response",
+      threadId: "thread-write-55",
+      toolCallId: "call-write-55",
+      content: JSON.stringify({ content: [{ type: "text", text: JSON.stringify({ number: 99, url: "https://github.test/pull/99" }) }] })
+    } } };
+
+    let listAttempts = 0;
+    const trueForgeRuntime = {
+      startSession: vi.fn().mockResolvedValue({
+        session: { id: "session-rec-1", title: null },
+        turn: { id: "turn-rec-1", sessionId: "session-rec-1", status: "running" }
+      }),
+      resolveToolApproval: vi.fn().mockResolvedValue({
+        id: "turn-approval-55",
+        sessionId: "session-rec-1",
+        status: "running"
+      }),
+      subscribeToTurn: vi.fn().mockImplementation(async (_sessionId: string, turnId: string) => {
+        if (turnId === "turn-rec-1") {
+          // Monitor stream drops
+          throw new Error("Stream connection dropped");
+        }
+        // Approval stream drops
+        throw new Error("Approval stream connection dropped");
+      }),
+      listSessionEvents: vi.fn().mockImplementation(async () => {
+        listAttempts += 1;
+        // First listing attempt fails transiently
+        if (listAttempts === 1) {
+          throw new Error("Temporary network timeout from TrueForge API");
+        }
+        if (listAttempts <= 3) {
+          return pauseEvents;
+        }
+        return [...pauseEvents, writeResponseEvent];
+      })
+    };
+    const githubClient = {
+      createIssueComment: vi.fn().mockResolvedValue({ id: 888, html_url: "https://github.test/issues/55#issuecomment-888" }),
+      addLabels: vi.fn().mockResolvedValue(undefined),
+      removeLabel: vi.fn().mockResolvedValue(undefined),
+      updateIssueComment: vi.fn().mockImplementation(async (_owner: string, _repo: string, id: number) => ({ id, html_url: "https://github.test/issues/55#issuecomment-888" }))
+    } as any;
+    const server = createByterServer({ staticDir, dataDir: liveDataDir, trueForgeRuntime, githubClient });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address() as AddressInfo;
+    const isolatedBaseUrl = `http://127.0.0.1:${address.port}`;
+    const payload = JSON.stringify({
+      action: "opened",
+      issue: {
+        number: 55,
+        title: "Parser crash with trailing escape",
+        body: "Trailing escape crashes the parser.",
+        html_url: "https://github.test/o/r/issues/55"
+      },
+      repository: {
+        name: "r",
+        full_name: "o/r",
+        default_branch: "main",
+        owner: { login: "o" }
+      }
+    });
+
+    try {
+      const response = await fetch(`${isolatedBaseUrl}/api/github/webhook`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-GitHub-Event": "issues",
+          "X-GitHub-Delivery": "delivery-reconcile-55",
+          "X-Hub-Signature-256": signWebhookPayload(payload, "webhook-secret")
+        },
+        body: payload
+      });
+      expect(response.status).toBe(202);
+
+      let latest: any;
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        latest = await fetch(`${isolatedBaseUrl}/api/runs/latest`).then((latestResponse) => latestResponse.json());
+        if (latest.run.status === "awaiting-approval") break;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(latest.run.status).toBe("awaiting-approval");
+      const patchHash = latest.trueForge.result.candidatePatch.hash;
+
+      const approval = await fetch(`${isolatedBaseUrl}/api/approvals`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer approval-token" },
+        body: JSON.stringify({ runId: latest.run.id, actionId: "approve-pr", patchHash })
+      });
+      const approvalBody = await approval.json();
+      expect(approval.status).toBe(200);
+      expect(approvalBody.resultStatus).toBe("pr-created");
+      expect(approvalBody.pullRequest).toEqual({ number: 99, url: "https://github.test/pull/99" });
+
+      const finalRun = await fetch(`${isolatedBaseUrl}/api/runs/latest`).then((latestResponse) => latestResponse.json());
+      expect(finalRun.run.status).toBe("pr-created");
+      expect(finalRun.trueForge.result.pullRequest).toEqual({ number: 99, url: "https://github.test/pull/99" });
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    }
+  });
+
   it("serves the default built web directory from the package working directory", async () => {
     const packageDir = join(dirname(fileURLToPath(import.meta.url)), "..");
     const previousCwd = process.cwd();

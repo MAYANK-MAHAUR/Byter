@@ -986,7 +986,21 @@ async function executeApproval(
       };
       await appendUpdatedLiveRecord(dataDir, approvalRecord);
     }
-    approvalEvents = await trueForgeRuntime.subscribeToTurn(sessionId, approvalTurn.id);
+    approvalEvents = await reconcileSessionEvents({
+      trueForgeRuntime,
+      sessionId,
+      turnId: approvalTurn.id,
+      isSettled: (evts) => {
+        try {
+          parsePullRequestFromTrueForgeEvents(evts, pendingApproval.toolCallId);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      maxPollAttempts: 30,
+      pollIntervalMs: 1000
+    });
   } catch (error) {
     const failedReceipt = buildApprovalReceipt(
       runId,
@@ -2016,6 +2030,85 @@ function findTrueForgeToolCall(
   return undefined;
 }
 
+interface ReconcileSessionEventsOptions {
+  trueForgeRuntime: ByterSessionStarter;
+  sessionId: string;
+  turnId?: string;
+  persistTraceEvent?: TrueForgeRuntimeEventListener;
+  isSettled?: (events: TrueForgeRuntimeEvent[]) => boolean;
+  maxPollAttempts?: number;
+  pollIntervalMs?: number;
+}
+
+async function reconcileSessionEvents(options: ReconcileSessionEventsOptions): Promise<TrueForgeRuntimeEvent[]> {
+  const {
+    trueForgeRuntime,
+    sessionId,
+    turnId,
+    persistTraceEvent,
+    isSettled = isTrueForgeTurnSettled,
+    maxPollAttempts = 60,
+    pollIntervalMs = process.env.NODE_ENV === "test" ? 5 : 5000
+  } = options;
+
+  let allEvents: TrueForgeRuntimeEvent[] = [];
+  const seenEventKeys = new Set<string>();
+
+  const recordEvents = async (incoming: TrueForgeRuntimeEvent[]) => {
+    for (const event of incoming) {
+      const raw = unwrapRuntimeEvent(event.raw);
+      const key = isRecord(raw) && typeof raw.id === "string"
+        ? raw.id
+        : `${event.sequenceNumber ?? "seq"}-${event.type}-${JSON.stringify(raw ?? {}).slice(0, 32)}`;
+      if (!seenEventKeys.has(key)) {
+        seenEventKeys.add(key);
+        allEvents.push(event);
+        if (persistTraceEvent) {
+          await persistTraceEvent(event);
+        }
+      }
+    }
+  };
+
+  let streamError: unknown;
+  if (turnId && trueForgeRuntime.subscribeToTurn) {
+    try {
+      const streamed = await trueForgeRuntime.subscribeToTurn(sessionId, turnId, persistTraceEvent);
+      await recordEvents(streamed);
+    } catch (err) {
+      streamError = err;
+      console.warn("TrueForge turn stream dropped; falling back to session event polling", err);
+    }
+  }
+
+  if (isSettled(allEvents)) {
+    return allEvents;
+  }
+
+  if (trueForgeRuntime.listSessionEvents) {
+    for (let attempt = 0; attempt < maxPollAttempts; attempt += 1) {
+      try {
+        const listed = await trueForgeRuntime.listSessionEvents(sessionId);
+        if (Array.isArray(listed) && listed.length > 0) {
+          await recordEvents(listed);
+          if (isSettled(allEvents)) {
+            return allEvents;
+          }
+        }
+      } catch (pollError) {
+        console.warn("Transient TrueForge listSessionEvents error during reconciliation:", pollError);
+      }
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    }
+  }
+
+  if (streamError) {
+    throw streamError;
+  }
+
+  return allEvents;
+}
+
 async function monitorTrueForgeTurn(
   dataDir: string,
   record: PersistedWebhookRunRecord,
@@ -2027,7 +2120,6 @@ async function monitorTrueForgeTurn(
   }
 
   try {
-    let events: TrueForgeRuntimeEvent[];
     let liveRecord = record;
     let activeTurnId = record.trueForge.turn.id;
     let liveEventIndex = 0;
@@ -2047,33 +2139,14 @@ async function monitorTrueForgeTurn(
       };
       await appendUpdatedLiveRecord(dataDir, liveRecord);
     };
-    let streamError: unknown;
-    try {
-      events = await trueForgeRuntime.subscribeToTurn(record.trueForge.session.id, record.trueForge.turn.id, persistTraceEvent);
-    } catch (error) {
-      streamError = error;
-      if (!trueForgeRuntime.listSessionEvents) {
-        throw error;
-      }
-      events = [];
-    }
 
-    if (streamError !== undefined || !isTrueForgeTurnSettled(events)) {
-      if (!trueForgeRuntime.listSessionEvents) {
-        throw streamError ?? new Error("TrueForge turn stream ended before completion or an approval checkpoint");
-      }
-
-      for (let attempt = 0; attempt < 60; attempt += 1) {
-        events = await trueForgeRuntime.listSessionEvents(record.trueForge.session.id);
-        for (const event of events) {
-          await persistTraceEvent(event);
-        }
-        if (isTrueForgeTurnSettled(events)) {
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 10_000));
-      }
-    }
+    let events = await reconcileSessionEvents({
+      trueForgeRuntime,
+      sessionId: record.trueForge.session.id,
+      turnId: record.trueForge.turn.id,
+      persistTraceEvent,
+      isSettled: isTrueForgeTurnSettled
+    });
 
     let completed = events.some((event) => event.type === "turn.done");
     let settled = isTrueForgeTurnSettled(events);
@@ -2112,11 +2185,14 @@ async function monitorTrueForgeTurn(
           }
         };
         await appendUpdatedLiveRecord(dataDir, liveRecord);
-        const recoveryEvents = await trueForgeRuntime.subscribeToTurn(
-          record.trueForge.session.id,
-          recoveryTurn.id,
-          persistTraceEvent
-        );
+
+        const recoveryEvents = await reconcileSessionEvents({
+          trueForgeRuntime,
+          sessionId: record.trueForge.session.id,
+          turnId: recoveryTurn.id,
+          persistTraceEvent,
+          isSettled: isTrueForgeTurnSettled
+        });
         events = [...events, ...recoveryEvents];
         completed = events.some((event) => event.type === "turn.done");
         settled = isTrueForgeTurnSettled(events);
