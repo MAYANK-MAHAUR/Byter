@@ -279,8 +279,7 @@ async function handleGitHubWebhook(
   const explicitTrigger = hasExplicitTrigger(webhook);
   if (
     (webhook.action === "labeled" && !hasTriggerLabel(webhook)) ||
-    (webhook.action === "edited" && !explicitTrigger) ||
-    (!isExplicitRetrigger && requiresExplicitTrigger() && !explicitTrigger)
+    (webhook.action === "edited" && !explicitTrigger)
   ) {
     sendJson(response, 202, {
       ignored: true,
