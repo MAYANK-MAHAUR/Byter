@@ -2218,9 +2218,8 @@ function extractTrueForgePendingApproval(
     if (event.type !== "tool.approval_required") continue;
     const raw = unwrapRuntimeEvent(event.raw);
     if (!isRecord(raw)) continue;
-    const threadId = firstString(raw, ["threadId", "thread_id"]);
+    const threadId = firstString(raw, ["threadId", "thread_id"]) ?? "main";
     const toolCallRefs = Array.isArray(raw.toolCalls) ? raw.toolCalls : Array.isArray(raw.tool_calls) ? raw.tool_calls : [];
-    if (!threadId) continue;
 
     for (const ref of toolCallRefs) {
       if (!isRecord(ref)) continue;
@@ -2239,6 +2238,39 @@ function extractTrueForgePendingApproval(
         ...(sourceEventId ? { sourceEventId } : {}),
         toolName: "create_fix_pull_request",
         payloadHash: expectedPayloadHash
+      };
+    }
+
+    const fallbackCall = findTrueForgeToolCallByName(events, "create_fix_pull_request");
+    if (fallbackCall) {
+      return {
+        turnId,
+        threadId,
+        toolCallId: fallbackCall.id,
+        toolName: "create_fix_pull_request",
+        payloadHash: expectedPayloadHash
+      };
+    }
+  }
+  return undefined;
+}
+
+function findTrueForgeToolCallByName(
+  events: TrueForgeRuntimeEvent[],
+  targetName: string
+): { id: string; name: string; arguments: Record<string, unknown> } | undefined {
+  for (const event of [...events].reverse()) {
+    if (event.type !== "model.message") continue;
+    const raw = unwrapRuntimeEvent(event.raw);
+    if (!isRecord(raw)) continue;
+    const toolCalls = Array.isArray(raw.toolCalls) ? raw.toolCalls : Array.isArray(raw.tool_calls) ? raw.tool_calls : [];
+    for (const toolCall of toolCalls) {
+      if (!isRecord(toolCall) || typeof toolCall.id !== "string" || !isRecord(toolCall.function)) continue;
+      if (typeof toolCall.function.name !== "string" || !toolCall.function.name.endsWith(targetName)) continue;
+      return {
+        id: toolCall.id,
+        name: toolCall.function.name,
+        arguments: parseToolArguments(toolCall.function.arguments)
       };
     }
   }
