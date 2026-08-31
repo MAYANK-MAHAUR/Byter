@@ -194,7 +194,7 @@ function StatusScreen({ icon, title, detail, error, action }: { icon: ReactNode;
 }
 
 function HarnessPanel({ harness }: { harness: HarnessState }) {
-  const statusLabel = harness.status === "fixture" ? "Fixture trace" : harness.status === "paused" ? "Paused for approval" : harness.status === "not-configured" ? "Not connected" : harness.status;
+  const statusLabel = harness.status === "paused" ? "Paused for approval" : harness.status === "not-configured" ? "Not connected" : harness.status;
   const latestComment = harness.commentHistory.at(-1);
   return (
     <section className={`harness-panel harness-${harness.status}`} aria-label="TrueForge harness">
@@ -291,7 +291,7 @@ function ApprovalActionButton({ action, pending, disabled, onClick }: { action: 
 }
 
 function TraceView({ harness }: { harness: HarnessState }) {
-  return <section className="panel trace-panel"><PanelTitle eyebrow="Executable evidence" title="Harness trace" icon={<Terminal size={17} />} /><div className="trace-intro"><span>{harness.trace.length ? `${harness.trace.length} persisted events` : "No rich events persisted"}</span><span>{harness.status === "fixture" ? "fixture trace" : harness.status === "paused" ? "checkpoint active" : "updates every 5 seconds"}</span></div>{harness.trace.length ? <ol className="trace-list">{harness.trace.map((event) => <TraceRow key={event.id} event={event} />)}</ol> : <div className="empty-state trace-empty"><Terminal size={22} /><div><strong>Trace details are not available for this run</strong><p>This historical record predates rich event persistence. New runs show tool calls, sandbox commands, and bounded output here.</p></div></div>}</section>;
+  return <section className="panel trace-panel"><PanelTitle eyebrow="Executable evidence" title="Harness trace" icon={<Terminal size={17} />} /><div className="trace-intro"><span>{harness.trace.length ? `${harness.trace.length} persisted events` : "No rich events persisted"}</span><span>{harness.status === "paused" ? "checkpoint active" : "updates every 5 seconds"}</span></div>{harness.trace.length ? <ol className="trace-list">{harness.trace.map((event) => <TraceRow key={event.id} event={event} />)}</ol> : <div className="empty-state trace-empty"><Terminal size={22} /><div><strong>Trace details are not available for this run</strong><p>This historical record predates rich event persistence. New runs show tool calls, sandbox commands, and bounded output here.</p></div></div>}</section>;
 }
 
 function TraceRow({ event }: { event: HarnessTraceEvent }) {

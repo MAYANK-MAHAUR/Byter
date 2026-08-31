@@ -7,6 +7,7 @@ import {
 import type {
   StartByterSessionInput,
   StartByterSessionResult,
+  ResolveToolApprovalInput,
   TrueForgeClientLike,
   TrueForgePartialSessionFailureDetails,
   TrueForgeRuntimeConfig,
@@ -84,6 +85,24 @@ export class ByterTrueForgeRuntime {
           {
             type: "user.message",
             content: buildProofContractRecoveryMessage()
+          }
+        ]
+      })
+    );
+  }
+
+  async resolveToolApproval(input: ResolveToolApprovalInput): Promise<TrueForgeTurn> {
+    return normalizeTurn(
+      await this.client.sessions.createTurn(input.sessionId, {
+        previousTurnId: input.previousTurnId,
+        input: [
+          {
+            type: "user.tool_approval",
+            threadId: input.threadId,
+            toolCallId: input.toolCallId,
+            approval: input.decision === "allow"
+              ? { status: "allow" }
+              : { status: "deny", ...(input.reason ? { reason: input.reason } : {}) }
           }
         ]
       })

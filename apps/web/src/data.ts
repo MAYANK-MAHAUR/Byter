@@ -1,5 +1,4 @@
 import type { ReproRun, RunStatus, SecurityScanResult } from "@byter/core";
-import type { DemoRunSummary } from "@byter/demo-runner";
 
 export type EvidenceKind = "stdout" | "stack" | "patch" | "policy";
 export type ApprovalActionId = "approve-pr" | "request-diff" | "reject-run";
@@ -55,7 +54,7 @@ export interface HarnessState {
   provider: string;
   sessionId?: string;
   turnId?: string;
-  status: "running" | "completed" | "paused" | "failed" | "not-configured" | "fixture";
+  status: "running" | "completed" | "paused" | "failed" | "not-configured";
   currentTask: string;
   trace: HarnessTraceEvent[];
   mcpCalls: number;
@@ -70,7 +69,7 @@ export interface HarnessState {
 
 export interface DashboardRun extends ReproRun {
   generatedAt: string;
-  source: "webhook" | "demo";
+  source: "webhook";
   sourceLabel: string;
   repoLabel: string;
   issueTitle: string;
@@ -151,15 +150,6 @@ export function apiUrl(path: string): string {
 }
 
 export async function fetchDashboardRun(fetchImpl: typeof fetch = fetch): Promise<DashboardRun> {
-  if (import.meta.env.VITE_BYTER_DATA_MODE === "demo") {
-    const response = await fetchImpl(apiUrl("/api/demo-run"), { cache: "no-store" });
-    if (!response.ok) {
-      throw new Error(`Demo run API returned ${response.status}`);
-    }
-
-    return toDashboardRun((await response.json()) as DemoRunSummary);
-  }
-
   const runId = typeof window !== "undefined" && window.location.pathname.startsWith("/runs/")
     ? window.location.pathname.slice("/runs/".length).replace(/\/review\/?$/, "")
     : undefined;
@@ -174,100 +164,6 @@ export async function fetchDashboardRun(fetchImpl: typeof fetch = fetch): Promis
   }
 
   return toDashboardRunFromWebhook((await liveResponse.json()) as WebhookRunRecord);
-}
-
-export function toDashboardRun(summary: DemoRunSummary): DashboardRun {
-  const expected = summary.validation.before.expected;
-  const matchedAttempts = summary.validation.before.attempts.filter((attempt) => attempt.matchedExpected).length;
-  const totalAttempts = summary.validation.before.attempts.length;
-  const afterPassed = commandPassed(summary.validation.after);
-  const regressionsPassed = summary.validation.regressions ? commandPassed(summary.validation.regressions) : undefined;
-
-  return {
-    ...summary.run,
-    generatedAt: summary.generatedAt,
-    source: "demo",
-    sourceLabel: "local proof demo",
-    repoLabel: summary.repository.replace("/", " / "),
-    issueTitle: summary.issueTitle,
-    assignee: "Byter agent",
-    runtime: summary.runtime,
-    model: summary.model,
-    currentBranch: summary.currentBranch,
-    candidatePatch: summary.candidatePatch,
-    rootCauseSummary: compactSummary(summary.issueTitle),
-    proposedFixSummary: compactSummary(summary.candidatePatch.title),
-    tests: [
-      { id: "reproduction", label: "Reproduction", status: summary.validation.before.status === "verified" ? "passed" : "failed", detail: `${matchedAttempts}/${totalAttempts} attempts matched the seeded failure` },
-      { id: "after", label: "After patch", status: afterPassed ? "passed" : "failed", detail: afterPassed ? "The same reproducer passes after the candidate change" : "The reproducer still fails after the candidate change" },
-      { id: "regression", label: "Regression suite", status: regressionsPassed === undefined ? "pending" : regressionsPassed ? "passed" : "failed", detail: summary.validation.regressions ? `exit ${summary.validation.regressions.exitCode ?? "unknown"}` : "No regression command returned" }
-    ],
-    proof: {
-      before: `${matchedAttempts}/${totalAttempts} reproduction attempts matched the failure`,
-      after: afterPassed ? "Candidate patch passed the reproduction" : "Candidate patch did not pass the reproduction",
-      regressions: summary.validation.regressions
-        ? `Regression command exited ${summary.validation.regressions.exitCode ?? "without a result"}`
-        : "No regression command returned",
-      attempts: `${matchedAttempts}/${totalAttempts} attempts`
-    },
-    harness: buildDemoHarness(summary),
-    evidence: [
-      {
-        id: "failure-fingerprint",
-        kind: "stack",
-        title: "Failure fingerprint",
-        value: formatFailure(expected),
-        detail: `${matchedAttempts}/${totalAttempts} attempts matched`,
-        status: summary.validation.before.status === "verified" ? "verified" : "warning"
-      },
-      {
-        id: "runner-result",
-        kind: "stdout",
-        title: "Runner result",
-        value: `exit ${summary.validation.after.exitCode ?? "not run"} after patch`,
-        detail: afterPassed ? "No timeout or output-limit flags" : summary.validation.reason ?? "Patch proof failed",
-        status: afterPassed ? "verified" : "blocked"
-      },
-      {
-        id: "patch-files",
-        kind: "patch",
-        title: "Files changed",
-        value: pluralize(summary.validation.filesChanged.length, "file"),
-        detail: summary.validation.filesChanged.join(", ") || "No files changed",
-        status: summary.validation.status === "patch-ready" ? "verified" : "warning"
-      },
-      {
-        id: "security-scan",
-        kind: "policy",
-        title: "Security scan",
-        value: pluralize(summary.safeIssueScan.findings.length, "finding"),
-        detail: summary.safeIssueScan.safeToExecute ? "Run cleared for sandbox execution" : "Run blocked before execution",
-        status: summary.safeIssueScan.safeToExecute ? "verified" : "blocked"
-      },
-      {
-        id: "regression-proof",
-        kind: "stdout",
-        title: "Regression proof",
-        value: regressionsPassed === undefined ? "not configured" : regressionsPassed ? "passed" : "failed",
-        detail: summary.validation.regressions
-          ? `exit ${summary.validation.regressions.exitCode ?? "not run"}`
-          : "No regression command returned",
-        status: regressionsPassed === false ? "blocked" : "verified"
-      }
-    ],
-    approvals: approvalActions,
-    security: summary.safeIssueScan,
-    quarantinedReports: summary.quarantinedIssueScan.findings.length
-      ? [
-          {
-            id: "held-demo-input",
-            issueNumber: summary.run.issue.issueNumber,
-            title: "Quarantined issue instruction",
-            security: summary.quarantinedIssueScan
-          }
-        ]
-      : []
-  };
 }
 
 export function toDashboardRunFromWebhook(record: WebhookRunRecord): DashboardRun {
@@ -451,13 +347,6 @@ function buildLiveTests(proof: { before?: string; after?: string; regressions?: 
   ];
 }
 
-function compactSummary(value?: string): string | undefined {
-  const compact = value?.replace(/\s+/g, " ").trim();
-  if (!compact) return undefined;
-  const sentence = compact.match(/^.{1,360}?(?:[.!?](?:\s|$)|$)/)?.[0] ?? compact;
-  return truncateAtBoundary(sentence, 380);
-}
-
 export const happyPathStatuses: RunStatus[] = [
   "received",
   "security-review",
@@ -582,107 +471,6 @@ function sanitizeTraceEvent(event: HarnessTraceEvent): HarnessTraceEvent {
     sequenceNumber: undefined,
     mcpServer: undefined
   };
-}
-
-function buildDemoHarness(summary: DemoRunSummary): HarnessState {
-  const trace = demoTrace(summary);
-  return {
-    model: summary.model,
-    provider: summary.model.split(" ")[0] ?? "fixture",
-    status: "fixture",
-    currentTask: "Fixture proof complete; approval is simulated",
-    trace,
-    mcpCalls: trace.filter((event) => event.category === "mcp").length,
-    sandboxExecutions: trace.filter((event) => event.category === "sandbox" && event.command).length,
-    subagents: 0,
-    commentHistory: []
-  };
-}
-
-function demoTrace(summary: DemoRunSummary): HarnessTraceEvent[] {
-  const at = (offset: number) => new Date(Date.parse(summary.generatedAt) + offset * 1_000).toISOString();
-  return [
-    {
-      id: "demo-issue",
-      at: at(0),
-      type: "mcp.read_issue",
-      category: "mcp",
-      source: "byter",
-      status: "passed",
-      summary: "Fixture read of the GitHub issue",
-      toolName: "read_issue",
-      mcpServer: "byter-github",
-      target: "issue #17"
-    },
-    {
-      id: "demo-file",
-      at: at(2),
-      type: "mcp.read_file",
-      category: "mcp",
-      source: "byter",
-      status: "passed",
-      summary: "Fixture read of parser.mjs",
-      toolName: "read_file",
-      mcpServer: "byter-github",
-      target: "parser.mjs"
-    },
-    {
-      id: "demo-sandbox",
-      at: at(4),
-      type: "sandbox.created",
-      category: "sandbox",
-      source: "byter",
-      status: "passed",
-      summary: "Fixture sandbox created",
-      sandboxId: "demo-local-sandbox"
-    },
-    {
-      id: "demo-before",
-      at: at(6),
-      type: "sandbox.exec",
-      category: "sandbox",
-      source: "byter",
-      status: "passed",
-      summary: "Fixture reproduction command completed",
-      command: "node repro.mjs",
-      exitCode: 1,
-      stderr: "TypeError: Cannot read properties of undefined"
-    },
-    {
-      id: "demo-after",
-      at: at(8),
-      type: "sandbox.exec",
-      category: "sandbox",
-      source: "byter",
-      status: "passed",
-      summary: "Fixture regression command completed",
-      command: "node regression.mjs",
-      exitCode: 0,
-      stdout: "passed"
-    },
-    {
-      id: "demo-done",
-      at: at(10),
-      type: "turn.done",
-      category: "session",
-      source: "byter",
-      status: "passed",
-      summary: "Fixture proof complete"
-    }
-  ];
-}
-
-function commandPassed(result: { exitCode: number | null; timedOut: boolean; outputLimitExceeded: boolean }): boolean {
-  return result.exitCode === 0 && !result.timedOut && !result.outputLimitExceeded;
-}
-
-function formatFailure(failure: { errorType: string; file?: string; line?: number }): string {
-  const location = failure.file ? `${shortPath(failure.file)}${failure.line ? `:${failure.line}` : ""}` : undefined;
-  return [failure.errorType, location].filter(Boolean).join(" / ");
-}
-
-function shortPath(path: string): string {
-  return path.replace(/\\/g, "/").split("/").at(-1) ?? path;
 }
 
 function pluralize(count: number, noun: string): string {

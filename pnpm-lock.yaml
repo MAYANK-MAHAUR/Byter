@@ -18,22 +18,6 @@ importers:
         specifier: ^2.1.1
         version: 2.1.9(@types/node@22.20.1)(lightningcss@1.33.0)
 
-  apps/demo-runner:
-    dependencies:
-      '@byter/core':
-        specifier: workspace:*
-        version: link:../../packages/core
-      '@byter/repro-engine':
-        specifier: workspace:*
-        version: link:../../packages/repro-engine
-    devDependencies:
-      typescript:
-        specifier: ^5.5.4
-        version: 5.9.3
-      vitest:
-        specifier: ^2.1.1
-        version: 2.1.9(@types/node@22.20.1)(lightningcss@1.33.0)
-
   apps/github-mcp:
     devDependencies:
       typescript:
@@ -51,9 +35,6 @@ importers:
       '@byter/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@byter/demo-runner':
-        specifier: workspace:*
-        version: link:../demo-runner
       '@byter/github':
         specifier: workspace:*
         version: link:../../packages/github
@@ -76,9 +57,6 @@ importers:
       '@byter/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@byter/demo-runner':
-        specifier: workspace:*
-        version: link:../demo-runner
       katex:
         specifier: ^0.18.4
         version: 0.18.4
@@ -123,15 +101,6 @@ importers:
         specifier: ^2.1.1
         version: 2.1.9(@types/node@22.20.1)(lightningcss@1.33.0)
 
-  demo/buggy-parser:
-    devDependencies:
-      typescript:
-        specifier: ^5.5.4
-        version: 5.9.3
-      vitest:
-        specifier: ^2.1.1
-        version: 2.1.9(@types/node@22.20.1)(lightningcss@1.33.0)
-
   packages/agent:
     dependencies:
       '@byter/core':
@@ -162,15 +131,6 @@ importers:
       '@types/node':
         specifier: ^22.0.0
         version: 22.20.1
-      typescript:
-        specifier: ^5.5.4
-        version: 5.9.3
-      vitest:
-        specifier: ^2.1.1
-        version: 2.1.9(@types/node@22.20.1)(lightningcss@1.33.0)
-
-  packages/repro-engine:
-    devDependencies:
       typescript:
         specifier: ^5.5.4
         version: 5.9.3

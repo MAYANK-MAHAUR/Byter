@@ -22,7 +22,6 @@
     "@byter/agent": "workspace:*",
     "@byter/core": "workspace:*",
     "@byter/github": "workspace:*",
-    "@byter/demo-runner": "workspace:*",
     "@byter/github-mcp": "workspace:*"
   },
   "devDependencies": {

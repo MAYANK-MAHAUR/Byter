@@ -5,7 +5,6 @@ RUN corepack enable
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json tsconfig.json ./
 COPY apps ./apps
-COPY demo ./demo
 COPY packages ./packages
 
 RUN pnpm install --frozen-lockfile
@@ -22,7 +21,6 @@ RUN corepack enable
 COPY --from=build /app/package.json /app/pnpm-lock.yaml /app/pnpm-workspace.yaml ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/apps ./apps
-COPY --from=build /app/demo ./demo
 COPY --from=build /app/packages ./packages
 
 EXPOSE 3000

@@ -8,11 +8,10 @@ import { ByterTrueForgeRuntime } from "@byter/agent";
 import {
   approvalPayloadHash,
   createGitHubMcpHttpHandler,
-  createGitHubMcpTools,
-  type GitHubMcpToolResult,
   type GitHubRestClientLike
 } from "@byter/github-mcp";
 import type {
+  ResolveToolApprovalInput,
   StartByterSessionInput,
   StartByterSessionResult,
   TrueForgeTurn,
@@ -20,7 +19,6 @@ import type {
   TrueForgeRuntimeEvent
 } from "@byter/agent";
 import { canTransition, createRun, scanIssueText, transitionRun } from "@byter/core";
-import { runDemo, type DemoRunSummary } from "@byter/demo-runner";
 import {
   GitHubRestClient,
   parseIssueCommentWebhook,
@@ -38,29 +36,17 @@ const maxPatchFileBytes = 512 * 1024;
 const maxPatchTotalBytes = 2 * 1024 * 1024;
 const maxHarnessEvents = 120;
 const maxHarnessTextBytes = 4 * 1024;
-const demoCacheTtlMs = 5_000;
 const duplicateIssueTriggerWindowMs = 60_000;
-let demoCache: { createdAt: number; summary: DemoRunSummary } | undefined;
-let demoInFlight: Promise<DemoRunSummary> | undefined;
 
 export interface ByterServerOptions {
   staticDir?: string;
   dataDir?: string;
   trueForgeRuntime?: ByterSessionStarter;
   mcpHandler?: McpRequestHandler;
-  githubTools?: GitHubWriteTools;
   githubClient?: GitHubRestClientLike;
 }
 
 type McpRequestHandler = (request: IncomingMessage, response: ServerResponse) => Promise<void>;
-
-interface GitHubWriteTools {
-  callTool(call: {
-    name: "create_fix_pull_request";
-    arguments: Record<string, unknown>;
-    approval: { approved: boolean; expectedPayloadHash: string };
-  }): Promise<GitHubMcpToolResult>;
-}
 
 interface LiveCandidatePatch {
   title: string;
@@ -70,6 +56,16 @@ interface LiveCandidatePatch {
   files: Array<{ path: string; content: string }>;
   hash: string;
   verifiedAt: string;
+}
+
+interface TrueForgePendingApproval {
+  turnId: string;
+  approvalTurnId?: string;
+  threadId: string;
+  toolCallId: string;
+  sourceEventId?: string;
+  toolName: "create_fix_pull_request";
+  payloadHash: string;
 }
 
 interface LiveProofResult {
@@ -115,6 +111,7 @@ interface HarnessTraceEvent {
 interface ByterSessionStarter {
   startSession(input: StartByterSessionInput): Promise<StartByterSessionResult>;
   requestProofContract?(sessionId: string): Promise<TrueForgeTurn>;
+  resolveToolApproval?(input: ResolveToolApprovalInput): Promise<TrueForgeTurn>;
   subscribeToTurn?(sessionId: string, turnId: string, onEvent?: TrueForgeRuntimeEventListener): Promise<TrueForgeRuntimeEvent[]>;
   listSessionEvents?(sessionId: string): Promise<TrueForgeRuntimeEvent[]>;
 }
@@ -144,6 +141,7 @@ interface PersistedWebhookRunRecord {
     provider?: string;
     events?: HarnessTraceEvent[];
     result?: LiveProofResult;
+    pendingApproval?: TrueForgePendingApproval;
   };
 }
 
@@ -152,7 +150,6 @@ export function createByterServer(options: ByterServerOptions = {}): Server {
   const dataDir = options.dataDir ?? process.env.DATA_DIR;
   const trueForgeRuntime = options.trueForgeRuntime ?? trueForgeRuntimeFromEnv();
   const githubClient = options.githubClient ?? githubClientFromEnv();
-  const githubTools = options.githubTools ?? (githubClient ? createGitHubMcpTools({ client: githubClient }) : undefined);
   const mcpHandler = options.mcpHandler ?? githubMcpHandlerFromEnv(githubClient);
   const activeIssueTriggers = new Set<string>();
 
@@ -162,11 +159,6 @@ export function createByterServer(options: ByterServerOptions = {}): Server {
     try {
       if (url.pathname === "/healthz") {
         sendJson(response, 200, { ok: true });
-        return;
-      }
-
-      if (url.pathname === "/api/demo-run") {
-        await handleDemoRun(request, response);
         return;
       }
 
@@ -190,7 +182,7 @@ export function createByterServer(options: ByterServerOptions = {}): Server {
       }
 
       if (url.pathname === "/api/approvals") {
-        await handleApproval(request, response, dataDir ? resolve(dataDir) : undefined, githubTools, githubClient);
+        await handleApproval(request, response, dataDir ? resolve(dataDir) : undefined, trueForgeRuntime, githubClient);
         return;
       }
 
@@ -201,7 +193,6 @@ export function createByterServer(options: ByterServerOptions = {}): Server {
           dataDir ? resolve(dataDir) : undefined,
           trueForgeRuntime,
           githubClient,
-          githubTools,
           activeIssueTriggers
         );
         return;
@@ -226,7 +217,6 @@ async function handleGitHubWebhook(
   dataDir: string | undefined,
   trueForgeRuntime: ByterSessionStarter | undefined,
   githubClient: GitHubRestClientLike | undefined,
-  githubTools: GitHubWriteTools | undefined,
   activeIssueTriggers: Set<string>
 ): Promise<void> {
   if (request.method !== "POST") {
@@ -270,7 +260,7 @@ async function handleGitHubWebhook(
   }
 
   if (eventName === "issue_comment") {
-    await handleGitHubIssueCommentWebhook(payload, response, dataDir, githubClient, githubTools);
+    await handleGitHubIssueCommentWebhook(payload, response, dataDir, githubClient, trueForgeRuntime);
     return;
   }
 
@@ -345,7 +335,7 @@ async function handleGitHubWebhook(
       scan.safeToExecute ? "triaging" : "rejected",
       scan.safeToExecute ? "Issue ready for TrueForge triage" : "Issue rejected by security policy"
     );
-    const orchestration = await startTrueForgeSessionForIssue(run, webhook, scan.safeToExecute, trueForgeRuntime);
+    const orchestration = await startTrueForgeSessionForIssue(run, webhook, deliveryId, scan.safeToExecute, trueForgeRuntime);
     run = orchestration.run;
 
     const record: PersistedWebhookRunRecord = {
@@ -402,7 +392,7 @@ async function handleGitHubIssueCommentWebhook(
   response: ServerResponse,
   dataDir: string,
   githubClient: GitHubRestClientLike | undefined,
-  githubTools: GitHubWriteTools | undefined
+  trueForgeRuntime: ByterSessionStarter | undefined
 ): Promise<void> {
   let webhook: ReturnType<typeof parseIssueCommentWebhook>;
   try {
@@ -470,7 +460,7 @@ async function handleGitHubIssueCommentWebhook(
     sendJson(response, 409, { error: "No approved candidate patch is available for this issue" });
     return;
   }
-  const result = await executeApproval(dataDir, liveRecord.run.id, "approve-pr", patchHash, githubTools, githubClient);
+  const result = await executeApproval(dataDir, liveRecord.run.id, "approve-pr", patchHash, trueForgeRuntime, githubClient);
   sendJson(response, result.statusCode, result.body);
 }
 
@@ -538,7 +528,7 @@ function publicRunPayload(value: unknown): unknown {
         })
       }
     : value.run;
-  const { session: _session, turn: _turn, ...trueForge } = value.trueForge;
+  const { session: _session, turn: _turn, pendingApproval: _pendingApproval, ...trueForge } = value.trueForge;
   const result = isRecord(trueForge.result)
     ? {
         ...trueForge.result,
@@ -744,6 +734,7 @@ function isPullRequest(value: unknown): value is { number: number; url: string }
 async function startTrueForgeSessionForIssue(
   run: ReturnType<typeof createRun>,
   webhook: ReturnType<typeof parseIssueWebhook>,
+  deliveryId: string,
   safeToExecute: boolean,
   trueForgeRuntime: ByterSessionStarter | undefined
 ) {
@@ -772,7 +763,9 @@ async function startTrueForgeSessionForIssue(
       repository: webhook.repository.full_name,
       issueUrl: webhook.issue.html_url,
       issueTitle: webhook.issue.title,
-      issueBody: webhook.issue.body ?? ""
+      issueBody: webhook.issue.body ?? "",
+      baseBranch: webhook.repository.default_branch,
+      branchName: branchNameForIssue(webhook.issue.number, deliveryId)
     });
 
     return {
@@ -806,20 +799,11 @@ async function startTrueForgeSessionForIssue(
   }
 }
 
-async function handleDemoRun(request: IncomingMessage, response: ServerResponse): Promise<void> {
-  if (request.method !== "GET") {
-    sendJson(response, 405, { error: "Method not allowed" });
-    return;
-  }
-
-  sendJson(response, 200, await getDemoRun());
-}
-
 async function handleApproval(
   request: IncomingMessage,
   response: ServerResponse,
   dataDir: string | undefined,
-  githubTools: GitHubWriteTools | undefined,
+  trueForgeRuntime: ByterSessionStarter | undefined,
   githubClient: GitHubRestClientLike | undefined
 ): Promise<void> {
   if (request.method !== "POST") {
@@ -847,7 +831,7 @@ async function handleApproval(
   const actionId = expectApprovalAction(payload.actionId);
   const runId = expectString(payload.runId, "runId");
   const patchHash = expectString(payload.patchHash, "patchHash");
-  const result = await executeApproval(dataDir, runId, actionId, patchHash, githubTools, githubClient);
+  const result = await executeApproval(dataDir, runId, actionId, patchHash, trueForgeRuntime, githubClient);
   sendJson(response, result.statusCode, result.body);
 }
 
@@ -861,19 +845,12 @@ async function executeApproval(
   runId: string,
   actionId: ApprovalActionId,
   patchHash: string,
-  githubTools: GitHubWriteTools | undefined,
+  trueForgeRuntime: ByterSessionStarter | undefined,
   githubClient: GitHubRestClientLike | undefined
 ): Promise<ApprovalExecutionResult> {
   const liveRecord = await findPersistedRunById(dataDir, runId);
   if (!liveRecord) {
-    const latestRun = await getDemoRun();
-    if (latestRun.run.id !== runId || latestRun.candidatePatch.hash !== patchHash) {
-      return { statusCode: 409, body: { error: "Approval payload does not match the current run" } };
-    }
-
-    const receipt = buildApprovalReceipt(runId, actionId, patchHash, resultStatusFor(actionId), messageFor(actionId));
-    await appendApprovalReceipt(dataDir, receipt);
-    return { statusCode: 200, body: receipt };
+    return { statusCode: 404, body: { error: "Persisted run not found" } };
   }
 
   const candidatePatch = liveRecord.trueForge.result?.candidatePatch;
@@ -893,8 +870,44 @@ async function executeApproval(
 
   if (actionId !== "approve-pr") {
     let run = liveRecord.run;
+    let trueForge = liveRecord.trueForge;
     if (actionId === "reject-run" && canTransition(run.status, "rejected")) {
       run = transitionRun(run, "rejected", "Maintainer rejected the live candidate patch");
+    }
+    if (
+      actionId === "reject-run" &&
+      liveRecord.trueForge.pendingApproval &&
+      liveRecord.trueForge.session?.id &&
+      trueForgeRuntime?.resolveToolApproval
+    ) {
+      try {
+        const denialTurn = await trueForgeRuntime.resolveToolApproval({
+          sessionId: liveRecord.trueForge.session.id,
+          previousTurnId: liveRecord.trueForge.pendingApproval.turnId,
+          threadId: liveRecord.trueForge.pendingApproval.threadId,
+          toolCallId: liveRecord.trueForge.pendingApproval.toolCallId,
+          decision: "deny",
+          reason: "Maintainer rejected the candidate patch"
+        });
+        const denialEvents = trueForgeRuntime.subscribeToTurn
+          ? await trueForgeRuntime.subscribeToTurn(liveRecord.trueForge.session.id, denialTurn.id)
+          : [];
+        trueForge = {
+          ...trueForge,
+          status: "completed",
+          turn: denialTurn,
+          pendingApproval: undefined,
+          events: mergeHarnessEvents(
+            trueForge.events ?? [],
+            denialEvents.flatMap((event, index) => projectTrueForgeEvent(event, index))
+          )
+        };
+      } catch (error) {
+        return {
+          statusCode: 502,
+          body: { error: error instanceof Error ? error.message : "TrueForge rejection resume failed" }
+        };
+      }
     }
     const receipt = buildApprovalReceipt(runId, actionId, patchHash, resultStatusFor(actionId), messageFor(actionId));
     await appendApprovalReceipt(dataDir, receipt);
@@ -902,8 +915,8 @@ async function executeApproval(
       ...liveRecord,
       run,
       trueForge: {
-        ...liveRecord.trueForge,
-        events: mergeHarnessEvents(liveRecord.trueForge.events ?? [], [{
+        ...trueForge,
+        events: mergeHarnessEvents(trueForge.events ?? [], [{
           id: `approval:${runId}:${actionId}`,
           at: receipt.savedAt,
           type: "approval.received",
@@ -924,22 +937,13 @@ async function executeApproval(
     return { statusCode: 200, body: receipt };
   }
 
-  if (!githubTools) {
-    return { statusCode: 503, body: { error: "GitHub write tools are not configured" } };
+  const pendingApproval = liveRecord.trueForge.pendingApproval;
+  const sessionId = liveRecord.trueForge.session?.id;
+  if (!pendingApproval || pendingApproval.payloadHash !== candidatePatch.hash) {
+    return { statusCode: 409, body: { error: "TrueForge is not waiting on this exact candidate patch" } };
   }
-
-  const writeArguments = {
-    owner: liveRecord.run.issue.owner,
-    repo: liveRecord.run.issue.repo,
-    baseBranch: candidatePatch.baseBranch,
-    branchName: candidatePatch.branchName,
-    title: candidatePatch.title,
-    body: candidatePatch.body,
-    files: candidatePatch.files
-  };
-  const expectedPayloadHash = approvalPayloadHash("create_fix_pull_request", writeArguments);
-  if (expectedPayloadHash !== candidatePatch.hash) {
-    return { statusCode: 409, body: { error: "Live candidate patch hash is invalid" } };
+  if (!sessionId || !trueForgeRuntime?.resolveToolApproval || !trueForgeRuntime.subscribeToTurn) {
+    return { statusCode: 503, body: { error: "TrueForge approval resume is not configured" } };
   }
 
   const writingReceipt = buildApprovalReceipt(
@@ -947,31 +951,69 @@ async function executeApproval(
     actionId,
     patchHash,
     "writing",
-    "Approval accepted; creating a draft GitHub pull request"
+    "Approval accepted; resuming the paused TrueForge GitHub write"
   );
   await appendApprovalReceipt(dataDir, writingReceipt);
 
-  let toolResult: GitHubMcpToolResult;
+  let approvalRecord = liveRecord;
+  let approvalTurn: TrueForgeTurn;
+  let approvalEvents: TrueForgeRuntimeEvent[];
   try {
-    toolResult = await githubTools.callTool({
-      name: "create_fix_pull_request",
-      arguments: writeArguments,
-      approval: { approved: true, expectedPayloadHash }
-    });
+    if (pendingApproval.approvalTurnId) {
+      approvalTurn = {
+        id: pendingApproval.approvalTurnId,
+        sessionId,
+        status: "running"
+      };
+    } else {
+      approvalTurn = await trueForgeRuntime.resolveToolApproval({
+        sessionId,
+        previousTurnId: pendingApproval.turnId,
+        threadId: pendingApproval.threadId,
+        toolCallId: pendingApproval.toolCallId,
+        decision: "allow"
+      });
+      approvalRecord = {
+        ...liveRecord,
+        trueForge: {
+          ...liveRecord.trueForge,
+          turn: approvalTurn,
+          pendingApproval: {
+            ...pendingApproval,
+            approvalTurnId: approvalTurn.id
+          }
+        }
+      };
+      await appendUpdatedLiveRecord(dataDir, approvalRecord);
+    }
+    approvalEvents = await trueForgeRuntime.subscribeToTurn(sessionId, approvalTurn.id);
   } catch (error) {
     const failedReceipt = buildApprovalReceipt(
       runId,
       actionId,
       patchHash,
       "write-failed",
-      error instanceof Error ? error.message : "GitHub pull request creation failed"
+      error instanceof Error ? error.message : "TrueForge approval resume failed"
     );
     await appendApprovalReceipt(dataDir, failedReceipt);
     return { statusCode: 502, body: { error: failedReceipt.message } };
   }
 
-  const pullRequest = parsePullRequestToolResult(toolResult);
-  let run = liveRecord.run;
+  let pullRequest: { number: number; url: string };
+  try {
+    pullRequest = parsePullRequestFromTrueForgeEvents(approvalEvents, pendingApproval.toolCallId);
+  } catch (error) {
+    const failedReceipt = buildApprovalReceipt(
+      runId,
+      actionId,
+      patchHash,
+      "write-failed",
+      error instanceof Error ? error.message : "TrueForge did not return a pull request receipt"
+    );
+    await appendApprovalReceipt(dataDir, failedReceipt);
+    return { statusCode: 502, body: { error: failedReceipt.message } };
+  }
+  let run = approvalRecord.run;
   if (canTransition(run.status, "approved")) {
     run = transitionRun(run, "approved", "Maintainer approved the verified candidate patch");
   }
@@ -981,11 +1023,15 @@ async function executeApproval(
     });
   }
   const updatedRecord: PersistedWebhookRunRecord = {
-    ...liveRecord,
+    ...approvalRecord,
     run,
     trueForge: {
-      ...liveRecord.trueForge,
-      events: mergeHarnessEvents(liveRecord.trueForge.events ?? [], [
+      ...approvalRecord.trueForge,
+      status: "completed",
+      turn: approvalTurn,
+      pendingApproval: undefined,
+      events: mergeHarnessEvents(approvalRecord.trueForge.events ?? [], [
+        ...approvalEvents.flatMap((event, index) => projectTrueForgeEvent(event, index)),
         {
           id: `approval:${runId}:${actionId}`,
           at: new Date().toISOString(),
@@ -993,15 +1039,15 @@ async function executeApproval(
           category: "approval",
           source: "byter",
           status: "passed",
-          summary: "Maintainer approval received; GitHub write completed",
+          summary: "Maintainer approval resumed the TrueForge GitHub write",
           toolName: "create_fix_pull_request",
-          target: `${liveRecord.run.issue.owner}/${liveRecord.run.issue.repo}`,
+          target: `${approvalRecord.run.issue.owner}/${approvalRecord.run.issue.repo}`,
           artifact: `draft PR #${pullRequest.number}`
         }
       ]),
       result: {
-        ...liveRecord.trueForge.result!,
-        summary: `${liveRecord.trueForge.result?.summary ?? "Verified candidate patch"} Draft PR created: ${pullRequest.url}`,
+        ...approvalRecord.trueForge.result!,
+        summary: `${approvalRecord.trueForge.result?.summary ?? "Verified candidate patch"} Draft PR created: ${pullRequest.url}`,
         pullRequest
       }
     }
@@ -1592,19 +1638,47 @@ async function findApprovalReceipt(
   }
 }
 
-function parsePullRequestToolResult(result: GitHubMcpToolResult): { number: number; url: string } {
-  const text = result.content.find((item) => item.type === "text")?.text;
-  if (!text) throw new Error("GitHub PR tool returned no result");
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text) as unknown;
-  } catch {
-    throw new Error("GitHub PR tool returned an invalid result");
+function parsePullRequestFromTrueForgeEvents(
+  events: TrueForgeRuntimeEvent[],
+  toolCallId: string
+): { number: number; url: string } {
+  for (const event of [...events].reverse()) {
+    if (event.type !== "tool.response") continue;
+    const raw = unwrapRuntimeEvent(event.raw);
+    if (!isRecord(raw)) continue;
+    const responseToolCallId = firstString(raw, ["toolCallId", "tool_call_id"]);
+    if (responseToolCallId !== toolCallId) continue;
+    const pullRequest = findPullRequest(raw.content);
+    if (pullRequest) return pullRequest;
   }
-  if (!isRecord(parsed) || typeof parsed.number !== "number" || typeof parsed.url !== "string") {
-    throw new Error("GitHub PR tool result did not include a pull request");
+  throw new Error("TrueForge did not return a pull request receipt for the approved tool call");
+}
+
+function findPullRequest(value: unknown, depth = 0): { number: number; url: string } | undefined {
+  if (depth > 8) return undefined;
+  if (typeof value === "string") {
+    try {
+      return findPullRequest(JSON.parse(value) as unknown, depth + 1);
+    } catch {
+      return undefined;
+    }
   }
-  return { number: parsed.number, url: parsed.url };
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const match = findPullRequest(item, depth + 1);
+      if (match) return match;
+    }
+    return undefined;
+  }
+  if (!isRecord(value)) return undefined;
+  if (typeof value.number === "number" && Number.isInteger(value.number) && value.number > 0 && typeof value.url === "string") {
+    return { number: value.number, url: value.url };
+  }
+  for (const item of Object.values(value)) {
+    const match = findPullRequest(item, depth + 1);
+    if (match) return match;
+  }
+  return undefined;
 }
 
 async function serveStatic(pathname: string, response: ServerResponse, staticDir: string): Promise<void> {
@@ -1661,26 +1735,6 @@ async function readText(request: IncomingMessage): Promise<string> {
   }
 
   return Buffer.concat(chunks).toString("utf8");
-}
-
-async function getDemoRun(): Promise<DemoRunSummary> {
-  const now = Date.now();
-  if (demoCache && now - demoCache.createdAt < demoCacheTtlMs) {
-    return demoCache.summary;
-  }
-
-  if (!demoInFlight) {
-    demoInFlight = runDemo().then((summary) => {
-      demoCache = { createdAt: Date.now(), summary };
-      return summary;
-    });
-  }
-
-  try {
-    return await demoInFlight;
-  } finally {
-    demoInFlight = undefined;
-  }
 }
 
 function isInside(root: string, target: string): boolean {
@@ -1903,6 +1957,65 @@ function receivedAtTimestamp(value: unknown): number {
   return Number.isFinite(timestamp) ? timestamp : Number.NEGATIVE_INFINITY;
 }
 
+function isTrueForgeTurnSettled(events: TrueForgeRuntimeEvent[]): boolean {
+  return events.some((event) => event.type === "turn.done" || event.type === "tool.approval_required");
+}
+
+function extractTrueForgePendingApproval(
+  events: TrueForgeRuntimeEvent[],
+  turnId: string,
+  expectedPayloadHash: string
+): TrueForgePendingApproval | undefined {
+  for (const event of [...events].reverse()) {
+    if (event.type !== "tool.approval_required") continue;
+    const raw = unwrapRuntimeEvent(event.raw);
+    if (!isRecord(raw)) continue;
+    const threadId = firstString(raw, ["threadId", "thread_id"]);
+    const toolCallRefs = Array.isArray(raw.toolCalls) ? raw.toolCalls : Array.isArray(raw.tool_calls) ? raw.tool_calls : [];
+    if (!threadId) continue;
+
+    for (const ref of toolCallRefs) {
+      if (!isRecord(ref) || typeof ref.id !== "string") continue;
+      const sourceEventId = firstString(ref, ["sourceEventId", "source_event_id"]);
+      const toolCall = findTrueForgeToolCall(events, ref.id, sourceEventId);
+      if (!toolCall || !toolCall.name.endsWith("create_fix_pull_request")) continue;
+      const payloadHash = approvalPayloadHash("create_fix_pull_request", toolCall.arguments);
+      if (payloadHash !== expectedPayloadHash) continue;
+      return {
+        turnId,
+        threadId,
+        toolCallId: ref.id,
+        ...(sourceEventId ? { sourceEventId } : {}),
+        toolName: "create_fix_pull_request",
+        payloadHash
+      };
+    }
+  }
+  return undefined;
+}
+
+function findTrueForgeToolCall(
+  events: TrueForgeRuntimeEvent[],
+  toolCallId: string,
+  sourceEventId?: string
+): { name: string; arguments: Record<string, unknown> } | undefined {
+  for (const event of [...events].reverse()) {
+    if (event.type !== "model.message") continue;
+    const raw = unwrapRuntimeEvent(event.raw);
+    if (!isRecord(raw) || (sourceEventId && raw.id !== sourceEventId)) continue;
+    const toolCalls = Array.isArray(raw.toolCalls) ? raw.toolCalls : Array.isArray(raw.tool_calls) ? raw.tool_calls : [];
+    for (const toolCall of toolCalls) {
+      if (!isRecord(toolCall) || toolCall.id !== toolCallId || !isRecord(toolCall.function)) continue;
+      if (typeof toolCall.function.name !== "string") continue;
+      return {
+        name: toolCall.function.name,
+        arguments: parseToolArguments(toolCall.function.arguments)
+      };
+    }
+  }
+  return undefined;
+}
+
 async function monitorTrueForgeTurn(
   dataDir: string,
   record: PersistedWebhookRunRecord,
@@ -1916,6 +2029,7 @@ async function monitorTrueForgeTurn(
   try {
     let events: TrueForgeRuntimeEvent[];
     let liveRecord = record;
+    let activeTurnId = record.trueForge.turn.id;
     let liveEventIndex = 0;
     const persistTraceEvent: TrueForgeRuntimeEventListener = async (event) => {
       const projected = projectTrueForgeEvent(event, liveEventIndex);
@@ -1944,9 +2058,9 @@ async function monitorTrueForgeTurn(
       events = [];
     }
 
-    if (streamError !== undefined || !events.some((event) => event.type === "turn.done")) {
+    if (streamError !== undefined || !isTrueForgeTurnSettled(events)) {
       if (!trueForgeRuntime.listSessionEvents) {
-        throw streamError ?? new Error("TrueForge turn stream ended before turn.done");
+        throw streamError ?? new Error("TrueForge turn stream ended before completion or an approval checkpoint");
       }
 
       for (let attempt = 0; attempt < 60; attempt += 1) {
@@ -1954,7 +2068,7 @@ async function monitorTrueForgeTurn(
         for (const event of events) {
           await persistTraceEvent(event);
         }
-        if (events.some((event) => event.type === "turn.done")) {
+        if (isTrueForgeTurnSettled(events)) {
           break;
         }
         await new Promise((resolve) => setTimeout(resolve, 10_000));
@@ -1962,11 +2076,12 @@ async function monitorTrueForgeTurn(
     }
 
     let completed = events.some((event) => event.type === "turn.done");
-    let result = completed ? extractLiveProofResult(events, record) : undefined;
+    let settled = isTrueForgeTurnSettled(events);
+    let result = settled ? extractLiveProofResult(events, record) : undefined;
     if (result) {
       result = await hydratePatchEvidence(result, record, githubClient);
     }
-    if (completed && !result && trueForgeRuntime.listSessionEvents) {
+    if (settled && !result && trueForgeRuntime.listSessionEvents) {
       try {
         const persistedEvents = await trueForgeRuntime.listSessionEvents(record.trueForge.session.id);
         if (persistedEvents.length > 0) {
@@ -1986,6 +2101,7 @@ async function monitorTrueForgeTurn(
     if (completed && !result && trueForgeRuntime.requestProofContract) {
       try {
         const recoveryTurn = await trueForgeRuntime.requestProofContract(record.trueForge.session.id);
+        activeTurnId = recoveryTurn.id;
         liveRecord = {
           ...liveRecord,
           trueForge: {
@@ -2003,7 +2119,8 @@ async function monitorTrueForgeTurn(
         );
         events = [...events, ...recoveryEvents];
         completed = events.some((event) => event.type === "turn.done");
-        result = completed ? extractLiveProofResult(events, record) : undefined;
+        settled = isTrueForgeTurnSettled(events);
+        result = settled ? extractLiveProofResult(events, record) : undefined;
         if (result) {
           result = await hydratePatchEvidence(result, record, githubClient);
         }
@@ -2015,33 +2132,48 @@ async function monitorTrueForgeTurn(
       liveRecord.trueForge.events ?? [],
       events.flatMap((event, index) => projectTrueForgeEvent(event, index))
     );
+    const pendingApproval = result?.candidatePatch
+      ? extractTrueForgePendingApproval(events, activeTurnId, result.candidatePatch.hash)
+      : undefined;
+    const validResult = Boolean(result && (!result.candidatePatch || pendingApproval));
     let run = record.run;
-    if (completed && result) {
+    if (settled && validResult && result) {
       run = applyLiveProofResult(run, result);
-    } else if (completed && canTransition(run.status, "failed")) {
-      run = transitionRun(run, "failed", "TrueForge completed without a valid byter.result contract");
+    } else if (settled && canTransition(run.status, "failed")) {
+      run = transitionRun(
+        run,
+        "failed",
+        result?.candidatePatch
+          ? "TrueForge returned a patch without a matching native approval checkpoint"
+          : "TrueForge completed without a valid byter.result contract"
+      );
     }
     const completedRecord: PersistedWebhookRunRecord = {
       ...liveRecord,
       run,
       trueForge: {
         ...liveRecord.trueForge,
-        status: completed ? "completed" : "started",
-        ...(completed
-          ? result
-            ? { error: undefined }
-            : { error: "TrueForge completed without a valid byter.result contract" }
+        status: pendingApproval ? "paused" : completed ? "completed" : "started",
+        ...(pendingApproval
+          ? { error: undefined }
+          : settled
+            ? validResult
+              ? { error: undefined }
+              : { error: result?.candidatePatch
+                  ? "TrueForge patch did not match a native approval checkpoint"
+                  : "TrueForge completed without a valid byter.result contract" }
           : { error: "TrueForge turn is still running; completion has not been observed" }),
         events: eventMetadata,
+        ...(pendingApproval ? { pendingApproval } : {}),
         ...(result ? { result } : {})
       }
     };
     const labeledRecord = await syncLifecycleLabels(completedRecord, githubClient);
-    const verifiedRecord = result ? await applyVerifiedLabel(labeledRecord, githubClient) : labeledRecord;
-    const approvalLabeledRecord = result
+    const verifiedRecord = validResult ? await applyVerifiedLabel(labeledRecord, githubClient) : labeledRecord;
+    const approvalLabeledRecord = validResult
       ? await applyAwaitingApprovalLabel(verifiedRecord, githubClient)
       : verifiedRecord;
-    const commentedRecord = await appendGitHubComment(approvalLabeledRecord, githubClient, result ? "completed" : "failed");
+    const commentedRecord = await appendGitHubComment(approvalLabeledRecord, githubClient, validResult ? "completed" : "failed");
     await appendUpdatedLiveRecord(dataDir, commentedRecord);
   } catch (error) {
     console.error("TrueForge turn subscription failed", error);
@@ -2131,6 +2263,18 @@ function projectTrueForgeEvent(event: TrueForgeRuntimeEvent, fallbackIndex = 0):
     }];
   }
 
+  if (type === "tool.approval_required") {
+    return [{
+      ...base,
+      id: eventId,
+      category: "approval",
+      status: "running",
+      summary: "TrueForge paused the GitHub write for maintainer approval",
+      toolName: "create_fix_pull_request",
+      artifact: "write held"
+    }];
+  }
+
   if (type === "sandbox.created") {
     const sandboxId = firstString(raw, ["sandbox_id", "sandboxId", "id"]);
     return [{
@@ -2177,7 +2321,7 @@ function mergeHarnessEvents(existing: HarnessTraceEvent[], incoming: HarnessTrac
 function categoryForTool(name: string): HarnessEventCategory {
   if (name === "exec" || name === "shell" || name === "run_command") return "sandbox";
   if (name === "read_issue" || name === "read_file" || name === "submit_byter_result" || name === "add_verified_label" || name === "comment_on_issue") return "mcp";
-  if (name === "create_fix_pull_request") return "github";
+  if (name.endsWith("create_fix_pull_request")) return "github";
   if (name.includes("subagent") || name.includes("delegate") || name === "task") return "subagent";
   return "agent";
 }
@@ -2187,7 +2331,7 @@ function summaryForTool(name: string, args: Record<string, unknown>): string {
   if (name === "read_file") return `Reading ${typeof args.path === "string" ? redactHarnessText(args.path) : "a repository file"} through GitHub MCP`;
   if (name === "read_issue") return `Reading ${typeof args.issueNumber === "number" ? `issue #${args.issueNumber}` : "the GitHub issue"} through GitHub MCP`;
   if (name === "submit_byter_result") return "Submitting the Byter proof contract";
-  if (name === "create_fix_pull_request") return "Preparing the approved GitHub pull request write";
+  if (name.endsWith("create_fix_pull_request")) return "Preparing the GitHub pull request write for approval";
   if (categoryForTool(name) === "subagent") return `Delegating ${typeof args.name === "string" ? args.name : "a focused task"}`;
   return `Calling ${name}`;
 }
@@ -2262,10 +2406,6 @@ function redactHarnessText(value: string): string {
 
 function extractLiveProofResult(events: TrueForgeRuntimeEvent[], record: PersistedWebhookRunRecord): LiveProofResult | undefined {
   const doneEvents = events.filter((event) => event.type === "turn.done").reverse();
-  if (doneEvents.length === 0) {
-    return undefined;
-  }
-
   const streamedDeltaText = joinBoundedTexts(
     events
       .filter((event) => event.type === "model.message.delta")
@@ -2450,10 +2590,7 @@ function normalizeCandidatePatch(value: unknown, record: PersistedWebhookRunReco
   }
 
   const baseBranch = record.baseBranch;
-  const branchName = `byter/fix-${record.run.issue.issueNumber}-${createHash("sha256")
-    .update(record.deliveryId)
-    .digest("hex")
-    .slice(0, 10)}`;
+  const branchName = branchNameForIssue(record.run.issue.issueNumber, record.deliveryId);
   const writeArguments = {
     owner: record.run.issue.owner,
     repo: record.run.issue.repo,
@@ -2473,6 +2610,10 @@ function normalizeCandidatePatch(value: unknown, record: PersistedWebhookRunReco
     hash: approvalPayloadHash("create_fix_pull_request", writeArguments),
     verifiedAt: new Date().toISOString()
   };
+}
+
+function branchNameForIssue(issueNumber: number, deliveryId: string): string {
+  return `byter/fix-${issueNumber}-${createHash("sha256").update(deliveryId).digest("hex").slice(0, 10)}`;
 }
 
 function applyLiveProofResult(run: ReturnType<typeof createRun>, result: LiveProofResult) {
@@ -2741,7 +2882,7 @@ function githubMcpHandlerFromEnv(githubClient: GitHubRestClientLike | undefined)
   return createGitHubMcpHttpHandler({
     client: githubClient,
     authToken: mcpAuthToken,
-    readOnly: true
+    readOnly: false
   });
 }
 

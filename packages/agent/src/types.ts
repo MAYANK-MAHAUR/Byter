@@ -30,7 +30,18 @@ export interface StartByterSessionInput {
   issueTitle: string;
   issueBody: string;
   repository: string;
+  baseBranch: string;
+  branchName: string;
   baseSha?: string;
+}
+
+export interface ResolveToolApprovalInput {
+  sessionId: string;
+  previousTurnId: string;
+  threadId: string;
+  toolCallId: string;
+  decision: "allow" | "deny";
+  reason?: string;
 }
 
 export interface StartByterSessionResult {

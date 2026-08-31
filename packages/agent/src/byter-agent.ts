@@ -74,7 +74,7 @@ export function buildByterAgentSpec(config: TrueForgeRuntimeConfig) {
       "Start with files named by the issue, the relevant source, and focused tests. Do not read README, docs, environment files, CI configuration, credential files, or unrelated examples unless the issue explicitly requires them. Never request, print, or reproduce secrets or environment-variable values.",
       "Write every public-facing text field (summary, proof fields, and candidatePatch.body) as concise GitHub-flavored Markdown made of complete sentences. Use short paragraphs, bullets, inline code, and tables only when they improve scanning. Never begin or end a field with a partial clause or a fragment copied from command output. When mathematical notation is genuinely useful, use GitHub-compatible inline $...$ math or block math with the opening and closing $$ delimiters on their own lines. Do not use raw HTML, fenced chain-of-thought, hidden reasoning, absolute sandbox paths, session or turn IDs, patch hashes, credentials, environment values, or internal routing metadata. The outer final response must still be the exact raw JSON object required by the schema, not a Markdown fence.",
       "Keep repository reads focused and bounded; prefer the smallest set of source and test files needed to reproduce the issue.",
-      "This is an unattended webhook run. Do not create subagents or generative UI; keep the investigation in the main agent so the bounded reproduction and final proof contract are not paused behind an interactive capability.",
+      "This is an unattended webhook run. Use focused dynamic subagents for triage and validation when they can produce bounded evidence without asking questions. Inspect their actual outputs before relying on them. Do not use generative UI.",
       "Detect the project language and toolchain from issue-relevant manifests only (for example package.json, pyproject.toml, requirements.txt, go.mod, Cargo.toml, pom.xml, or build.gradle). Never assume Node.js.",
       "The sandbox may not include the detected runtime or package manager. Check versions before installing dependencies; if a runtime is missing, install a portable user-space toolchain under /tmp/byter-tools using an official archive or the available package manager, add it to PATH for the current turn, and keep the download/install bounded. For a Node repository with no node/npm/corepack, immediately use one bounded command such as `mkdir -p /tmp/byter-tools && cd /tmp/byter-tools && curl -A 'Mozilla/5.0' -fsSL --max-time 45 https://nodejs.org/dist/v22.14.0/node-v22.14.0-linux-x64.tar.gz -o node.tar.gz && tar -xzf node.tar.gz && export PATH=/tmp/byter-tools/node-v22.14.0-linux-x64/bin:$PATH && node --version && corepack pnpm --version`; use wget with the same User-Agent if curl is unavailable. Do not declare the environment blocked until this portable bootstrap has been attempted and its bounded failure is recorded. Prefer npm or corepack for Node, venv and pip for Python, the official Go archive for Go, and rustup with the minimal profile for Rust. Do not use credentials or modify the base image.",
       "Run the smallest reproducer supplied by the issue before installing the whole workspace. Do not run workspace-wide install, build, or test commands when a focused package-level reproducer is sufficient. If the required runtime cannot be installed safely or a bounded dependency install times out, report the environment as blocked; do not retry the same stalled command indefinitely.",
@@ -82,7 +82,7 @@ export function buildByterAgentSpec(config: TrueForgeRuntimeConfig) {
       "Require human approval before any GitHub write.",
       "Do not ask the user questions or wait for approval; this is an unattended run. If evidence is incomplete, finish with a blocked or failed result instead.",
       "Stop and report evidence when execution is blocked by security policy.",
-      "When the work is complete, first call the read-only submit_byter_result MCP tool with exactly one object containing kind=\"byter.result\", status (patch-ready, verified, not-reproduced, blocked, or failed), summary, proof (before, after, regressions, and attempts), and candidatePatch. This tool call is the authoritative handoff and does not mutate GitHub. Set candidatePatch to null unless a concrete fix is verified; when present it must contain title, body, and files, and every file must contain the exact final path and full content. Then return the same object as the final model message with no fence or prose. Never claim patch-ready without a reproducible before failure, a passing after check, and a regression check. After those checks pass, stop; do not rerun successful commands merely to improve output formatting. Do not call GitHub write tools; stop before mutation."
+      "When the work is complete, first call the read-only submit_byter_result MCP tool with exactly one object containing kind=\"byter.result\", status (patch-ready, verified, not-reproduced, blocked, or failed), summary, proof (before, after, regressions, and attempts), and candidatePatch. This tool call is the authoritative proof handoff and does not mutate GitHub. Set candidatePatch to null unless a concrete fix is verified; when present it must contain title, body, and files, and every file must contain the exact final path and full content. Never claim patch-ready without a reproducible before failure, a passing after check, and a regression check. For a patch-ready result, immediately call create_fix_pull_request with the exact owner, repo, baseBranch, reserved branchName, title, body, and files supplied by the run. TrueForge must pause that write for human approval; never bypass or simulate the approval. After the approved tool call finishes, return the same byter.result object as the final model message with no fence or prose. For every other status, return the object immediately after submit_byter_result."
     ].join("\n"),
     config: {
       iterationLimit: 64,
@@ -93,7 +93,7 @@ export function buildByterAgentSpec(config: TrueForgeRuntimeConfig) {
         enabled: false
       },
       dynamicSubAgents: {
-        enabled: false
+        enabled: true
       },
       sandbox: {
         enabled: true,
@@ -104,8 +104,8 @@ export function buildByterAgentSpec(config: TrueForgeRuntimeConfig) {
       {
         name: config.mcpServerName ?? "byter-github",
         preload: true,
-        enableTools: ["@read-only"],
-        requireApprovalForTools: []
+        enableTools: ["read_issue", "read_file", "submit_byter_result", "create_fix_pull_request"],
+        requireApprovalForTools: ["create_fix_pull_request"]
       }
     ]
   };
@@ -118,6 +118,8 @@ export function buildInitialUserMessage(input: StartByterSessionInput): string {
     `Repository: ${input.repository}`,
     `Issue: ${input.issueUrl}`,
     `Title: ${input.issueTitle}`,
+    `Base branch: ${input.baseBranch}`,
+    `Reserved fix branch: ${input.branchName}`,
     input.baseSha ? `Base SHA: ${input.baseSha}` : "Base SHA: default branch HEAD",
     "",
     "Issue body:",
@@ -134,9 +136,9 @@ export function buildInitialUserMessage(input: StartByterSessionInput): string {
     "6a. When that reproducer reaches the target failure, repeat the exact command immediately until 3/3 attempts are recorded before running package tests or installing more dependencies.",
     "7. Require the same target failure 3/3 before verification.",
     "8. Prepare a complete candidatePatch with exact final file contents if the fix is verified.",
-    "9. Pause before any GitHub mutation.",
+    "9. After submitting a patch-ready proof, call create_fix_pull_request with the repository owner/name, base branch, reserved fix branch, candidate title/body, and exact candidate files. TrueForge will pause this call for maintainer approval.",
     "9a. Write summary, proof fields, and candidatePatch.body as concise, public-safe GitHub-flavored Markdown. Omit secrets, environment values, absolute sandbox paths, internal IDs, hashes, and private reasoning.",
-    "10. Call the read-only submit_byter_result MCP tool with exactly one JSON object using this shape; then finish with the same object as the final response (do not wrap it in markdown):",
+    "10. Call the read-only submit_byter_result MCP tool with exactly one JSON object using this shape before requesting the gated write; after the write is approved and completes, finish with the same object as the final response (do not wrap it in markdown):",
     '{"kind":"byter.result","status":"patch-ready","summary":"...","proof":{"before":"...","after":"...","regressions":"...","attempts":"3/3"},"candidatePatch":{"title":"...","body":"...","files":[{"path":"src/file.ts","content":"full file content"}]}}',
     "Use status=not-reproduced, blocked, or failed and set candidatePatch to null when proof is incomplete."
   ].join("\n");
