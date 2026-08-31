@@ -914,6 +914,109 @@ describe("Byter production server", () => {
     }
   });
 
+  it("matches a native approval when its source event wrapper differs", async () => {
+    const staticDir = await mkdtemp(join(tmpdir(), "byter-static-"));
+    const liveDataDir = await mkdtemp(join(tmpdir(), "byter-data-"));
+    await writeFile(join(staticDir, "index.html"), "<main>Byter</main>", "utf8");
+    const proofText = JSON.stringify({
+      kind: "byter.result",
+      status: "patch-ready",
+      summary: "Reproduced 3/3 and passed the regression check.",
+      proof: { before: "3/3 failed", after: "3/3 passed", regressions: "passed", attempts: "3/3" },
+      candidatePatch: {
+        title: "Fix parser crash",
+        body: "Verified by Byter.",
+        files: [{ path: "src/parser.ts", content: "export const fixed = true;\n" }]
+      }
+    });
+    const writeArguments = {
+      owner: "o",
+      repo: "r",
+      baseBranch: "main",
+      branchName: `byter/fix-23-${createHash("sha256").update("delivery-proof-23").digest("hex").slice(0, 10)}`,
+      title: "Fix parser crash",
+      body: "Verified by Byter.",
+      files: [{ path: "src/parser.ts", content: "export const fixed = true;\n" }]
+    };
+    const trueForgeRuntime = {
+      startSession: vi.fn().mockResolvedValue({
+        session: { id: "session-proof-2", title: null },
+        turn: { id: "turn-proof-2", sessionId: "session-proof-2", status: "running" }
+      }),
+      subscribeToTurn: vi.fn().mockResolvedValue([
+        ...executableProofEvents("proof-23", 1),
+        submittedResultEvent("proof-23", 1, proofText),
+        {
+          sequenceNumber: 3,
+          type: "model.message",
+          raw: {
+            data: {
+              id: "stream-wrapper-id",
+              type: "model.message",
+              tool_calls: [{
+                id: "call-write-23",
+                type: "function",
+                function: { name: "create_fix_pull_request", arguments: JSON.stringify(writeArguments) }
+              }]
+            }
+          }
+        },
+        {
+          sequenceNumber: 4,
+          type: "tool.approval_required",
+          raw: {
+            event: {
+              id: "approval-wrapper-id",
+              type: "tool.approval_required",
+              thread_id: "thread-write-23",
+              tool_calls: [{ id: "call-write-23", source_event_id: "different-wrapper-id" }]
+            }
+          }
+        }
+      ])
+    };
+    const githubClient = {
+      createIssueComment: vi.fn().mockResolvedValue({ id: 723, html_url: "https://github.test/issues/23#issuecomment-723" }),
+      addLabels: vi.fn().mockResolvedValue(undefined),
+      updateIssueComment: vi.fn().mockResolvedValue({ id: 723, html_url: "https://github.test/issues/23#issuecomment-723" })
+    } as any;
+    const server = createByterServer({ staticDir, dataDir: liveDataDir, trueForgeRuntime, githubClient });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address() as AddressInfo;
+    const isolatedBaseUrl = `http://127.0.0.1:${address.port}`;
+    const payload = JSON.stringify({
+      action: "opened",
+      issue: { number: 23, title: "Parser crash", body: "Parser crashes.", html_url: "https://github.test/o/r/issues/23" },
+      repository: { name: "r", full_name: "o/r", default_branch: "main", owner: { login: "o" } }
+    });
+
+    try {
+      const response = await fetch(`${isolatedBaseUrl}/api/github/webhook`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-GitHub-Event": "issues",
+          "X-GitHub-Delivery": "delivery-proof-23",
+          "X-Hub-Signature-256": signWebhookPayload(payload, "webhook-secret")
+        },
+        body: payload
+      });
+      expect(response.status).toBe(202);
+
+      let latest: any;
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        latest = await fetch(`${isolatedBaseUrl}/api/runs/latest`).then((latestResponse) => latestResponse.json());
+        if (latest.run.status === "awaiting-approval") break;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(latest.run.status).toBe("awaiting-approval");
+      expect(latest.trueForge.pendingApproval).toBeUndefined();
+      expect(latest.trueForge.status).toBe("paused");
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    }
+  });
+
   it("deduplicates repeated GitHub delivery IDs", async () => {
     const payload = JSON.stringify({
       action: "opened",

@@ -2222,16 +2222,20 @@ function extractTrueForgePendingApproval(
     if (!threadId) continue;
 
     for (const ref of toolCallRefs) {
-      if (!isRecord(ref) || typeof ref.id !== "string") continue;
+      if (!isRecord(ref)) continue;
+      const toolCallId = firstString(ref, ["id", "toolCallId", "tool_call_id"]);
+      if (!toolCallId) continue;
       const sourceEventId = firstString(ref, ["sourceEventId", "source_event_id"]);
-      const toolCall = findTrueForgeToolCall(events, ref.id, sourceEventId);
+      const toolCall =
+        findTrueForgeToolCall(events, toolCallId, sourceEventId) ??
+        findTrueForgeToolCall(events, toolCallId);
       if (!toolCall || !toolCall.name.endsWith("create_fix_pull_request")) continue;
       const payloadHash = approvalPayloadHash("create_fix_pull_request", toolCall.arguments);
       if (payloadHash !== expectedPayloadHash) continue;
       return {
         turnId,
         threadId,
-        toolCallId: ref.id,
+        toolCallId,
         ...(sourceEventId ? { sourceEventId } : {}),
         toolName: "create_fix_pull_request",
         payloadHash
