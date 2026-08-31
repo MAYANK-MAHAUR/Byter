@@ -19,7 +19,7 @@ Large repositories receive more bug reports than maintainers can manually reprod
 
 ## TrueForge In The Loop
 
-TrueForge is the durable harness behind every live run. It starts the model turn, connects the GitHub MCP tools, provisions sandbox execution, records observable events, and returns the structured proof contract that drives Byter's UI.
+TrueForge is the durable harness behind every live run. It starts the model turn, connects the GitHub MCP tools, provisions sandbox execution, records observable events, returns the structured proof contract that drives Byter's UI, and pauses `create_fix_pull_request` through its native tool-approval event before any repository mutation. Byter has no alternate local runner or fixture-data API.
 
 The public [issue #32 run](https://byter-production-1024.up.railway.app/runs/github-MAYANK-MAHAUR-Byter-32-8fd16ca98fd2) is real: 57 persisted events, 11 repository-tool events, 22 sandbox events, a 3/3 reproduction, a passing candidate patch, and regression proof. It is intentionally paused at `awaiting-approval`.
 
@@ -35,13 +35,13 @@ Byter shows what the agent did, what evidence it produced, and what it is waitin
 - Scoped GitHub tools and bounded sandbox output.
 - Secret, path, and provider-detail redaction before public persistence.
 - Repeated failure proof plus after-patch and regression validation.
-- Maintainer approval before the first GitHub write; approved changes open as a draft PR.
+- TrueForge-native maintainer approval before branch, commit, or pull-request creation; approval resumes the exact pending MCP tool call and opens a draft PR.
 
 ## Qodo Code Review Evidence
 
 Qodo reviewed the project across every focused pull request while it was being built. We fixed valid findings and requested follow-up reviews instead of treating code review as a one-time badge.
 
-Below is the complete inventory of pull requests reviewed by Qodo throughout the build:
+Below is a representative inventory of pull requests reviewed by Qodo throughout the build:
 
 <details open>
 <summary><strong>Core Architecture & Hardening PRs (Featured)</strong></summary>
@@ -148,27 +148,6 @@ Below is the complete inventory of pull requests reviewed by Qodo throughout the
 </details>
 
 <details>
-<summary><strong>PR #12: Feat: connect dashboard to live demo API (Merged)</strong></summary>
-
-- **Pull Request**: [#12 (feat/live-dashboard-integration)](https://github.com/MAYANK-MAHAUR/Byter/pull/12)
-- **Findings & Actions**: Verified mock-free live demo data providers and schema compliance with production API contracts.
-</details>
-
-<details>
-<summary><strong>PR #9: Chore: add workspace verification CI (Merged)</strong></summary>
-
-- **Pull Request**: [#9 (feat/ci-ship-polish)](https://github.com/MAYANK-MAHAUR/Byter/pull/9)
-- **Findings & Actions**: Verified multi-package verification workflow (`pnpm verify`) across build, lint, typecheck, unit tests, and e2e demo runner.
-</details>
-
-<details>
-<summary><strong>PR #8: Feat: add e2e demo runner (Merged)</strong></summary>
-
-- **Pull Request**: [#8 (feat/demo-hardening)](https://github.com/MAYANK-MAHAUR/Byter/pull/8)
-- **Findings & Actions**: Hardened end-to-end demo execution against flake and added reference-aware verification checks.
-</details>
-
-<details>
 <summary><strong>PR #6: Dashboard console (Merged)</strong></summary>
 
 - **Pull Request**: [#6 (feat/dashboard-console)](https://github.com/MAYANK-MAHAUR/Byter/pull/6)
@@ -234,10 +213,12 @@ apps/server          webhooks, persistence, approvals, and public API
 apps/web             live harness and evidence dashboard
 apps/github-mcp      scoped repository tools and approved writes
 packages/agent       TrueForge runtime and structured proof contract
-packages/repro-engine reproduction and patch validation
-demo/buggy-parser    deterministic target library for offline verification
+packages/core        run state machine and issue security scanning
+packages/github      signed webhooks, GitHub App auth, and REST client
 ```
 
 Built for the [TrueForge Agent Harness Hackathon](https://www.wemakedevs.org/hackathons/trueforge).
 
 ## AI Usage Disclosure
+
+OpenAI Codex and other AI coding assistants supported implementation, testing, and documentation. The maintainer reviewed the resulting changes, and substantive pull requests were reviewed with Qodo before merge.

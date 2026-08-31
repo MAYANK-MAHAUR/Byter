@@ -38,14 +38,14 @@ describe("Byter TrueForge runtime", () => {
     });
     expect(spec.config.askUserQuestions.enabled).toBe(false);
     expect(spec.config.generativeUi.enabled).toBe(false);
-    expect(spec.config.dynamicSubAgents.enabled).toBe(false);
+    expect(spec.config.dynamicSubAgents.enabled).toBe(true);
     expect(spec.config.sandbox.enabled).toBe(true);
     expect(spec.mcpServers).toEqual([
       {
         name: "byter-github",
         preload: true,
-        enableTools: ["@read-only"],
-        requireApprovalForTools: []
+        enableTools: ["read_issue", "read_file", "submit_byter_result", "create_fix_pull_request"],
+        requireApprovalForTools: ["create_fix_pull_request"]
       }
     ]);
   });
@@ -56,11 +56,14 @@ describe("Byter TrueForge runtime", () => {
       issueTitle: "Trailing escape crash",
       issueBody: "Tokenizer throws on a single backslash.",
       repository: "MAYANK-MAHAUR/Byter",
+      baseBranch: "main",
+      branchName: "byter/fix-1-test",
       baseSha: "abc123"
     });
 
     expect(message).toContain("Repository: MAYANK-MAHAUR/Byter");
     expect(message).toContain("Base SHA: abc123");
+    expect(message).toContain("Reserved fix branch: byter/fix-1-test");
     expect(message).toContain("Require the same target failure 3/3");
     expect(buildByterAgentSpec(config).instructions).toContain("node-v22.14.0-linux-x64.tar.gz");
     expect(buildByterAgentSpec(config).instructions).toContain("submit_byter_result");
@@ -93,7 +96,9 @@ describe("Byter TrueForge runtime", () => {
       issueUrl: "https://github.com/MAYANK-MAHAUR/Byter/issues/1",
       issueTitle: "Bug",
       issueBody: "Breaks",
-      repository: "MAYANK-MAHAUR/Byter"
+      repository: "MAYANK-MAHAUR/Byter",
+      baseBranch: "main",
+      branchName: "byter/fix-1-test"
     });
 
     expect(result.session.id).toBe("session_1");
@@ -140,6 +145,41 @@ describe("Byter TrueForge runtime", () => {
         })]
       })
     );
+  });
+
+  it("resumes an exact TrueForge tool approval", async () => {
+    const client = {
+      sessions: {
+        create: vi.fn(),
+        createTurn: vi.fn().mockResolvedValue({
+          data: {
+            id: "turn_approval",
+            sessionId: "session_1",
+            state: { status: "running" }
+          }
+        }),
+        listEvents: vi.fn()
+      }
+    };
+    const runtime = new ByterTrueForgeRuntime(config, client);
+
+    await runtime.resolveToolApproval({
+      sessionId: "session_1",
+      previousTurnId: "turn_1",
+      threadId: "thread_1",
+      toolCallId: "call_1",
+      decision: "allow"
+    });
+
+    expect(client.sessions.createTurn).toHaveBeenCalledWith("session_1", {
+      previousTurnId: "turn_1",
+      input: [{
+        type: "user.tool_approval",
+        threadId: "thread_1",
+        toolCallId: "call_1",
+        approval: { status: "allow" }
+      }]
+    });
   });
 
   it("normalizes stored session events", async () => {
@@ -194,7 +234,9 @@ describe("Byter TrueForge runtime", () => {
         issueUrl: "https://github.com/MAYANK-MAHAUR/Byter/issues/1",
         issueTitle: "Bug",
         issueBody: "Breaks",
-        repository: "MAYANK-MAHAUR/Byter"
+        repository: "MAYANK-MAHAUR/Byter",
+        baseBranch: "main",
+        branchName: "byter/fix-1-test"
       })
     ).rejects.toMatchObject({
       name: "TrueForgeInitialTurnError",
@@ -223,7 +265,9 @@ describe("Byter TrueForge runtime", () => {
         issueUrl: "https://github.com/MAYANK-MAHAUR/Byter/issues/1",
         issueTitle: "Bug",
         issueBody: "Breaks",
-        repository: "MAYANK-MAHAUR/Byter"
+        repository: "MAYANK-MAHAUR/Byter",
+        baseBranch: "main",
+        branchName: "byter/fix-1-test"
       });
       throw new Error("Expected startSession to fail");
     } catch (error) {

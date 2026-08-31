@@ -8,8 +8,7 @@
     "moduleResolution": "Bundler",
     "noEmit": true,
     "paths": {
-      "@byter/core": ["../../packages/core/src/index.js"],
-      "@byter/demo-runner": ["../../apps/demo-runner/src/index.ts"]
+      "@byter/core": ["../../packages/core/src/index.js"]
     },
     "sourceMap": false,
     "types": ["vite/client"]

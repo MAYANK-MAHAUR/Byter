@@ -72,24 +72,21 @@ pnpm install
 
 #### 2.2 Monorepo Package Topology
 
-The repository contains **10 packages** (1 root + 9 workspace packages):
+The repository contains **7 packages** (1 root + 6 workspace packages):
 
 | # | Package Name | Workspace Directory | Role & Description | Test Files & Count |
 |---|---|---|---|---|
 | 1 | `byter` (root) | `.` | Monorepo orchestrator scripts (`verify`, `build`, `lint`, `typecheck`, `test`, `dev`, `start`) | Workspace delegation |
 | 2 | `@byter/core` | `packages/core` | 20-state FSM (`state-machine.ts`), prompt injection & dangerous shell scanner (`security.ts`), domain types | 2 files &rarr; **9 tests** |
-| 3 | `@byter/agent` | `packages/agent` | TrueForge SDK runtime (`runtime.ts`), Agent spec & instructions generator (`byter-agent.ts`) | 1 file &rarr; **9 tests** |
+| 3 | `@byter/agent` | `packages/agent` | TrueForge SDK runtime (`runtime.ts`), Agent spec, native tool approval resume, and instructions generator (`byter-agent.ts`) | 1 file &rarr; **10 tests** |
 | 4 | `@byter/github` | `packages/github` | GitHub REST client (`client.ts`), HMAC-SHA256 webhook validator (`webhook.ts`), App auth (`app-auth.ts`) | 3 files &rarr; **14 tests** |
-| 5 | `@byter/repro-engine` | `packages/repro-engine` | Process runner with bounded output (`runner.ts`), fingerprint matcher (`fingerprint.ts`), 3/3 verifier | 5 files &rarr; **23 tests** |
-| 6 | `@byter/demo-runner` | `apps/demo-runner` | Standalone E2E bug triage demo pipeline (`index.ts`, `cli.ts`) for offline validation | 1 file &rarr; **1 test** |
-| 7 | `@byter/github-mcp` | `apps/github-mcp` | Remote JSON-RPC 2.0 MCP server hosting 6 GitHub MCP tools (`http.ts`, `tools.ts`) | 2 files &rarr; **15 tests** |
-| 8 | `@byter/server` | `apps/server` | Production HTTP server: `/healthz`, `/mcp`, `/api/github/webhook`, `/api/approvals`, static SPA | 2 files &rarr; **29 tests** |
-| 9 | `@byter/web` | `apps/web` | React 19 + Vite dashboard: live triage view, evidence visualizer, markdown/LaTeX viewer, approval UI | 1 file &rarr; **2 tests** |
-| 10 | `@byter/buggy-parser` | `demo/buggy-parser` | Test fixture repository reproducing tokenizer trailing backslash bug | 1 file &rarr; **2 tests** |
+| 5 | `@byter/github-mcp` | `apps/github-mcp` | Remote JSON-RPC 2.0 MCP server hosting 6 GitHub MCP tools (`http.ts`, `tools.ts`) | 2 files &rarr; **15 tests** |
+| 6 | `@byter/server` | `apps/server` | Production HTTP server: `/healthz`, `/mcp`, `/api/github/webhook`, `/api/approvals`, static SPA | 2 files &rarr; **29 tests** |
+| 7 | `@byter/web` | `apps/web` | React 19 + Vite dashboard: live triage view, evidence visualizer, markdown/LaTeX viewer, approval UI | 1 file &rarr; **2 tests** |
 
 #### 2.3 Run Automated Verification Suite
 
-Run `pnpm verify` to execute all 5 verification phases:
+Run `pnpm verify` to execute all 4 verification phases:
 ```bash
 pnpm verify
 ```
@@ -97,9 +94,8 @@ pnpm verify
 **Verification Phases Executed:**
 1. `pnpm build`: Compiles all workspace packages via TypeScript project references.
 2. `pnpm lint`: Validates source code against linting rules.
-3. `pnpm typecheck`: Validates strict static types across all 10 packages (`tsc --noEmit`).
-4. `pnpm test`: Runs **18 test files** and passes all **104/104 tests** across the monorepo.
-5. `pnpm demo:e2e`: Executes the end-to-end tokenizer bug triage pipeline through all state machine transitions (`received` &rarr; `security-review` &rarr; `triaging` &rarr; `reproducing` &rarr; `verified` &rarr; `minimizing` &rarr; `fixing` &rarr; `validating` &rarr; `patch-ready` &rarr; `awaiting-approval`).
+3. `pnpm typecheck`: Validates strict static types across all 7 packages (`tsc --noEmit`).
+4. `pnpm test`: Runs **11 test files** and passes all **79/79 tests** across the monorepo.
 
 ---
 
@@ -160,7 +156,7 @@ VITE_BYTER_API_URL=
 # =============================================================
 MODEL_PROVIDER=openai
 MODEL_NAME=gpt-5.6-sol
-OPENAI_API_KEY=sk-your-actual-openai-api-key
+OPENAI_API_KEY=<your-openai-api-key>
 
 # =============================================================
 # 4. TrueForge Local Agent Harness
@@ -173,7 +169,7 @@ MCP_AUTH_TOKEN=local-mcp-secret-token
 # =============================================================
 # 5. GitHub Integration & Trigger Policy
 # =============================================================
-GITHUB_TOKEN=ghp_your_personal_access_token
+GITHUB_TOKEN=<your-github-token>
 BYTER_REQUIRE_TRIGGER_LABEL=true
 BYTER_TRIGGER_LABEL=byter:run
 ```
@@ -376,9 +372,10 @@ Byter executes a 4-stage lifecycle for every incoming bug report:
 5. The agent calls `submit_byter_result` with the structured proof contract.
 
 #### Stage 3: Pausing at `awaiting-approval` Gate
-1. Byter receives the completed proof contract and calculates `patchHash = SHA256(canonical(patchArguments))`.
-2. Byter updates GitHub labels: removes `byter:triaging` and applies `byter:verified` (`#8250df`) and `byter:awaiting-approval` (`#d1242f`).
-3. Byter updates the GitHub issue comment with full verification evidence:
+1. The agent submits the proof contract, requests `create_fix_pull_request`, and TrueForge emits `tool.approval_required` before the MCP server receives the write.
+2. Byter verifies that the pending TrueForge tool-call arguments hash to the same `patchHash = SHA256(canonical(patchArguments))` as the displayed candidate.
+3. Byter updates GitHub labels: removes `byter:triaging` and applies `byter:verified` (`#8250df`) and `byter:awaiting-approval` (`#d1242f`).
+4. Byter updates the GitHub issue comment with full verification evidence:
    ```markdown
    <!-- byter-run:run-1740936000-abc12345 -->
    ### 🤖 Byter — Bug Verified & Patch Ready (Awaiting Maintainer Approval)
@@ -403,8 +400,8 @@ Maintainers can approve via two separate channels:
 
 **Outcome:**
 1. Byter verifies `patchHash` and records cryptographic receipt in `DATA_DIR/approvals.jsonl`.
-2. Byter invokes MCP write tool `create_fix_pull_request`:
-   - Creates git branch `byter/fix-issue-<issueNumber>-<shortHash>`.
+2. Byter sends a `user.tool_approval` decision to TrueForge for the exact stored thread and tool-call IDs. TrueForge resumes MCP write tool `create_fix_pull_request`:
+   - Creates git branch `byter/fix-<issueNumber>-<shortHash>`.
    - Commits the validated fix files.
    - Publishes a **Draft Pull Request** linked to the issue.
 3. Labels update: removes `byter:awaiting-approval` and applies `byter:pr-created` (`#1a7f37`).
@@ -577,8 +574,6 @@ curl -X POST https://<your-byter-domain>.up.railway.app/mcp \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 
-# 5. Test Demo Run Endpoint
-curl -f https://<your-byter-domain>.up.railway.app/api/demo-run
 ```
 
 #### Live End-to-End Test Procedure:

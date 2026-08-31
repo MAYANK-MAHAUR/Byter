@@ -9,16 +9,14 @@
       "@byter/agent": ["../../packages/agent/src/index.ts"],
       "@byter/core": ["../../packages/core/src/index.js"],
       "@byter/github-mcp": ["../github-mcp/src/index.ts"],
-      "@byter/github": ["../../packages/github/src/index.js"],
-      "@byter/demo-runner": ["../../apps/demo-runner/src/index.ts"]
+      "@byter/github": ["../../packages/github/src/index.js"]
     }
   },
   "references": [
     { "path": "../../packages/agent" },
     { "path": "../github-mcp" },
     { "path": "../../packages/core" },
-    { "path": "../../packages/github" },
-    { "path": "../demo-runner" }
+    { "path": "../../packages/github" }
   ],
   "include": ["src/**/*.ts"],
   "exclude": ["dist", "test"]
