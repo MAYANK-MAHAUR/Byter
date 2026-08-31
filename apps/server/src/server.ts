@@ -60,6 +60,7 @@ interface LiveCandidatePatch {
 
 interface TrueForgePendingApproval {
   turnId: string;
+    approvalTurnId?: string;
   threadId: string;
   toolCallId: string;
   sourceEventId?: string;
@@ -957,14 +958,28 @@ async function executeApproval(
   let approvalTurn: TrueForgeTurn;
   let approvalEvents: TrueForgeRuntimeEvent[];
   try {
-    approvalTurn = await trueForgeRuntime.resolveToolApproval({
+    if (pendingApproval.approvalTurnId) {
+        approvalTurn = { id: pendingApproval.approvalTurnId, sessionId, status: "in_progress" };
+      } else {
+        approvalTurn = await trueForgeRuntime.resolveToolApproval({
       sessionId,
       previousTurnId: pendingApproval.turnId,
       threadId: pendingApproval.threadId,
       toolCallId: pendingApproval.toolCallId,
       decision: "allow"
     });
-    approvalEvents = await trueForgeRuntime.subscribeToTurn(sessionId, approvalTurn.id);
+    if (!pendingApproval.approvalTurnId) {
+        await appendUpdatedLiveRecord(dataDir, {
+          ...liveRecord,
+          trueForge: {
+            ...liveRecord.trueForge,
+            turn: approvalTurn,
+            pendingApproval: { ...pendingApproval, approvalTurnId: approvalTurn.id }
+          }
+        });
+      }
+      }
+      approvalEvents = await trueForgeRuntime.subscribeToTurn(sessionId, approvalTurn.id);
   } catch (error) {
     const failedReceipt = buildApprovalReceipt(
       runId,
@@ -2858,7 +2873,7 @@ function githubMcpHandlerFromEnv(githubClient: GitHubRestClientLike | undefined)
   return createGitHubMcpHttpHandler({
     client: githubClient,
     authToken: mcpAuthToken,
-    readOnly: true
+    readOnly: false
   });
 }
 
