@@ -35,7 +35,7 @@ describe("GitHub status comment rendering", () => {
     ["security-review", "Security review", "Execution was held"],
     ["awaiting-approval", "Patch ready for review", "TrueForge is paused"],
     ["pr-created", "Fix proposed", "Draft PR created"],
-    ["failed", "Run failed", "No genuine proof contract"]
+    ["failed", "Run failed", "complete proof-and-approval contract"]
   ])("renders the %s state as a concise status comment", (status, label, stateText) => {
     const verifiedResult = {
       status: "verified",

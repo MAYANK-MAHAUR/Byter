@@ -926,11 +926,18 @@ async function executeApproval(
   if (!candidatePatch || candidatePatch.hash !== patchHash || !Array.isArray(candidatePatch.files) || candidatePatch.files.length === 0) {
     return { statusCode: 409, body: { error: "Approval payload has no valid patch files" } };
   }
-  const previousReceipt = await findApprovalReceipt(dataDir, runId, actionId, patchHash);
-  if (previousReceipt?.resultStatus === "writing") {
+  const previousReceipt = await findApprovalReceipt(dataDir, runId, actionId, patchHash, postgresStore);
+  const canReconcilePersistedApproval = Boolean(
+    actionId === "approve-pr" && liveRecord.trueForge.pendingApproval?.approvalTurnId
+  );
+  if (previousReceipt?.resultStatus === "writing" && !canReconcilePersistedApproval) {
     return { statusCode: 409, body: { error: "This approval is already being processed" } };
   }
-  if (previousReceipt && previousReceipt.resultStatus !== "write-failed") {
+  if (
+    previousReceipt &&
+    previousReceipt.resultStatus !== "write-failed" &&
+    !(previousReceipt.resultStatus === "writing" && canReconcilePersistedApproval)
+  ) {
     return { statusCode: 200, body: previousReceipt };
   }
   if (liveRecord.run.status !== "awaiting-approval") {
@@ -1010,98 +1017,7 @@ async function executeApproval(
   const sessionId = liveRecord.trueForge.session?.id;
 
   if (!pendingApproval) {
-    if (!githubClient) {
-      return { statusCode: 503, body: { error: "GitHub client is not configured for direct approval execution" } };
-    }
-    const writingReceipt = buildApprovalReceipt(
-      runId,
-      actionId,
-      patchHash,
-      "writing",
-      "Approval accepted; creating draft pull request on GitHub"
-    );
-    await appendApprovalReceipt(dataDir, writingReceipt, postgresStore);
-
-    let pullRequest: { number: number; html_url: string };
-    try {
-      const base = await githubClient.getBranch(liveRecord.run.issue.owner, liveRecord.run.issue.repo, candidatePatch.baseBranch);
-      const baseCommit = await githubClient.getCommit(liveRecord.run.issue.owner, liveRecord.run.issue.repo, base.commit.sha);
-      const tree = await githubClient.createTree(liveRecord.run.issue.owner, liveRecord.run.issue.repo, {
-        baseTree: baseCommit.tree.sha,
-        files: candidatePatch.files.map((file) => ({ path: file.path, content: file.content }))
-      });
-      const commit = await githubClient.createCommit(liveRecord.run.issue.owner, liveRecord.run.issue.repo, {
-        message: `Byter fix: ${candidatePatch.title}`,
-        tree: tree.sha,
-        parents: [base.commit.sha]
-      });
-      await githubClient.createBranch(liveRecord.run.issue.owner, liveRecord.run.issue.repo, candidatePatch.branchName, commit.sha);
-      pullRequest = await githubClient.createPullRequest(liveRecord.run.issue.owner, liveRecord.run.issue.repo, {
-        title: candidatePatch.title,
-        body: candidatePatch.body,
-        head: candidatePatch.branchName,
-        base: candidatePatch.baseBranch,
-        draft: true
-      });
-    } catch (error) {
-      const failedReceipt = buildApprovalReceipt(
-        runId,
-        actionId,
-        patchHash,
-        "write-failed",
-        error instanceof Error ? error.message : "Direct GitHub pull request creation failed"
-      );
-      await appendApprovalReceipt(dataDir, failedReceipt, postgresStore);
-      return { statusCode: 502, body: { error: failedReceipt.message } };
-    }
-
-    let run = liveRecord.run;
-    if (canTransition(run.status, "approved")) {
-      run = transitionRun(run, "approved", "Maintainer approved the verified candidate patch");
-    }
-    if (canTransition(run.status, "pr-created")) {
-      run = transitionRun(run, "pr-created", "Draft GitHub pull request created", {
-        evidence: { pullRequestUrl: pullRequest.html_url, pullRequestNumber: pullRequest.number }
-      });
-    }
-    const updatedRecord: PersistedWebhookRunRecord = {
-      ...liveRecord,
-      run,
-      trueForge: {
-        ...liveRecord.trueForge,
-        status: "completed",
-        result: {
-          ...liveRecord.trueForge.result!,
-          pullRequest: { number: pullRequest.number, url: pullRequest.html_url }
-        },
-        events: mergeHarnessEvents(liveRecord.trueForge.events ?? [], [
-          {
-            id: `approval:${runId}:${actionId}`,
-            at: new Date().toISOString(),
-            type: "approval.received",
-            category: "approval",
-            source: "byter",
-            status: "passed",
-            summary: "Maintainer approved the verified candidate patch",
-            toolName: "create_fix_pull_request",
-            target: `${liveRecord.run.issue.owner}/${liveRecord.run.issue.repo}`,
-            artifact: `draft PR #${pullRequest.number}`
-          }
-        ])
-      }
-    };
-    const receipt = buildApprovalReceipt(
-      runId,
-      actionId,
-      patchHash,
-      "pr-created",
-      `Draft pull request created: #${pullRequest.number}`,
-      { pullRequest: { number: pullRequest.number, url: pullRequest.html_url } }
-    );
-    await appendApprovalReceipt(dataDir, receipt, postgresStore);
-    const commentedRecord = await appendGitHubComment(updatedRecord, githubClient, "approval");
-    await appendUpdatedLiveRecord(dataDir, commentedRecord, postgresStore);
-    return { statusCode: 200, body: receipt };
+    return { statusCode: 409, body: { error: "TrueForge did not return the mandatory native approval checkpoint" } };
   }
 
   if (pendingApproval.payloadHash !== candidatePatch.hash) {
@@ -1488,20 +1404,44 @@ function hasGenuineProof(result: LiveProofResult | undefined): boolean {
     result?.candidatePatch &&
     Array.isArray(result.candidatePatch.files) &&
     result.candidatePatch.files.length > 0 &&
-    result.candidatePatch.files.every((file) => typeof file.path === "string" && file.path.trim().length > 0 && typeof file.content === "string" && file.content.trim().length > 0)
+    isMeaningfulProofText(result.candidatePatch.title, 8) &&
+    isMeaningfulProofText(result.candidatePatch.body, 12) &&
+    result.candidatePatch.files.every((file) => isMeaningfulProofText(file.path, 3) && isMeaningfulProofText(file.content, 4))
   );
   return Boolean(
     (result?.status === "verified" || result?.status === "patch-ready") &&
-      typeof proof?.before === "string" &&
-      proof.before.trim().length > 0 &&
-      typeof proof?.after === "string" &&
-      proof.after.trim().length > 0 &&
-      typeof proof?.regressions === "string" &&
-      proof.regressions.trim().length > 0 &&
-      typeof proof?.attempts === "string" &&
-      proof.attempts.trim().length > 0 &&
+      isMeaningfulProofText(result.summary, 20) &&
+      isMeaningfulProofText(proof?.before, 6) &&
+      isMeaningfulProofText(proof?.after, 6) &&
+      isMeaningfulProofText(proof?.regressions, 6) &&
+      hasThreeMatchingAttempts(proof?.attempts) &&
       (!result?.candidatePatch || hasValidPatchFiles)
   );
+}
+
+function isMeaningfulProofText(value: unknown, minimumLength: number): value is string {
+  if (typeof value !== "string") return false;
+  const text = value.trim();
+  return text.length >= minimumLength && !/^(?:\.{3}|…|todo|tbd|n\/?a|placeholder|full file content)$/i.test(text);
+}
+
+function hasThreeMatchingAttempts(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  const match = value.match(/(?:^|\D)(\d+)\s*\/\s*(\d+)(?:\D|$)/);
+  return Boolean(match && Number(match[1]) >= 3 && match[1] === match[2]);
+}
+
+function hasExecutableProof(events: HarnessTraceEvent[]): boolean {
+  const ranReproducer = events.some((event) => {
+    if (event.category !== "sandbox" || typeof event.command !== "string") return false;
+    const command = event.command.toLowerCase();
+    return /\b(?:repro|test|spec|vitest|jest|pytest)\b/.test(command) &&
+      /\b(?:node|pnpm|npm|npx|bun|deno|python|pytest|cargo|go|dotnet|mvn|gradle)\b/.test(command);
+  });
+  const completedSandboxCommand = events.some((event) =>
+    event.category === "sandbox" && event.type === "tool.response" && event.status === "passed"
+  );
+  return ranReproducer && completedSandboxCommand;
 }
 
 async function appendGitHubComment(
@@ -1610,7 +1550,7 @@ export function buildGitHubStatusComment(record: PersistedWebhookRunRecord, kind
       "",
       `**[View evidence ->](${runUrl})**`
     );
-  } else if (result?.candidatePatch && hasGenuineProof(result)) {
+  } else if (record.run.status !== "failed" && result?.candidatePatch && hasGenuineProof(result)) {
     lines.push(
       "",
       "### Evidence",
@@ -1636,7 +1576,7 @@ export function buildGitHubStatusComment(record: PersistedWebhookRunRecord, kind
         `**[Review evidence & approve patch →](${reviewUrl})**`
       );
     }
-  } else if (result && hasGenuineProof(result)) {
+  } else if (record.run.status !== "failed" && result && hasGenuineProof(result)) {
     lines.push(
       "",
       "### Evidence",
@@ -1655,7 +1595,7 @@ export function buildGitHubStatusComment(record: PersistedWebhookRunRecord, kind
     const failureReason = record.trueForge.error ?? record.run.events?.slice(-1)[0]?.message ?? "TrueForge completed without a valid proof contract.";
     lines.push(
       "",
-      "> No genuine proof contract was returned. No verified label or repository mutation was made.",
+      "> The run did not produce a complete proof-and-approval contract. No verified label or repository mutation was made.",
       "",
       "### Failure details",
       safeCommentMarkdown(failureReason, 4000),
@@ -1856,9 +1796,19 @@ async function findApprovalReceipt(
   dataDir: string | undefined,
   runId: string,
   actionId: ApprovalActionId,
-  patchHash: string
+  patchHash: string,
+  postgresStore?: PostgresStore
 ): Promise<ApprovalReceipt | undefined> {
-  if (!dataDir) return undefined;
+  let postgresReceipt: ApprovalReceipt | undefined;
+  if (postgresStore) {
+    try {
+      const receipt = await postgresStore.findApprovalReceipt(runId, actionId, patchHash);
+      if (receipt) postgresReceipt = receipt as ApprovalReceipt;
+    } catch (error) {
+      console.error("Postgres findApprovalReceipt error:", error);
+    }
+  }
+  if (!dataDir) return postgresReceipt;
   try {
     let match: ApprovalReceipt | undefined;
     for await (const line of readJsonlLines(join(dataDir, "approvals.jsonl"))) {
@@ -1871,9 +1821,11 @@ async function findApprovalReceipt(
         // Ignore a partial or malformed line.
       }
     }
-    return match;
+    if (!match) return postgresReceipt;
+    if (!postgresReceipt) return match;
+    return Date.parse(match.savedAt) >= Date.parse(postgresReceipt.savedAt) ? match : postgresReceipt;
   } catch {
-    return undefined;
+    return postgresReceipt;
   }
 }
 
@@ -2302,6 +2254,7 @@ interface ReconcileSessionEventsOptions {
   isSettled?: (events: TrueForgeRuntimeEvent[]) => boolean;
   maxPollAttempts?: number;
   pollIntervalMs?: number;
+  ignoreEvents?: TrueForgeRuntimeEvent[];
 }
 
 async function reconcileSessionEvents(options: ReconcileSessionEventsOptions): Promise<TrueForgeRuntimeEvent[]> {
@@ -2312,18 +2265,16 @@ async function reconcileSessionEvents(options: ReconcileSessionEventsOptions): P
     persistTraceEvent,
     isSettled = isTrueForgeTurnSettled,
     maxPollAttempts = 60,
-    pollIntervalMs = process.env.NODE_ENV === "test" ? 5 : 5000
+    pollIntervalMs = process.env.NODE_ENV === "test" ? 5 : 5000,
+    ignoreEvents = []
   } = options;
 
   let allEvents: TrueForgeRuntimeEvent[] = [];
-  const seenEventKeys = new Set<string>();
+  const seenEventKeys = new Set(ignoreEvents.map(runtimeEventKey));
 
   const recordEvents = async (incoming: TrueForgeRuntimeEvent[]) => {
     for (const event of incoming) {
-      const raw = unwrapRuntimeEvent(event.raw);
-      const key = isRecord(raw) && typeof raw.id === "string"
-        ? raw.id
-        : `${event.sequenceNumber ?? "seq"}-${event.type}-${JSON.stringify(raw ?? {}).slice(0, 32)}`;
+      const key = runtimeEventKey(event);
       if (!seenEventKeys.has(key)) {
         seenEventKeys.add(key);
         allEvents.push(event);
@@ -2337,7 +2288,9 @@ async function reconcileSessionEvents(options: ReconcileSessionEventsOptions): P
   let streamError: unknown;
   if (turnId && trueForgeRuntime.subscribeToTurn) {
     try {
-      const streamed = await trueForgeRuntime.subscribeToTurn(sessionId, turnId, persistTraceEvent);
+      const streamed = await trueForgeRuntime.subscribeToTurn(sessionId, turnId, async (event) => {
+        await recordEvents([event]);
+      });
       await recordEvents(streamed);
     } catch (err) {
       streamError = err;
@@ -2370,7 +2323,14 @@ async function reconcileSessionEvents(options: ReconcileSessionEventsOptions): P
     throw streamError;
   }
 
-  return allEvents;
+  throw new Error("TrueForge turn did not reach its expected terminal event before reconciliation timed out");
+}
+
+function runtimeEventKey(event: TrueForgeRuntimeEvent): string {
+  const raw = unwrapRuntimeEvent(event.raw);
+  return isRecord(raw) && typeof raw.id === "string"
+    ? raw.id
+    : `${event.sequenceNumber ?? "seq"}-${event.type}-${createHash("sha256").update(JSON.stringify(raw ?? {})).digest("hex").slice(0, 16)}`;
 }
 
 async function monitorTrueForgeTurn(
@@ -2456,7 +2416,8 @@ async function monitorTrueForgeTurn(
           sessionId: record.trueForge.session.id,
           turnId: recoveryTurn.id,
           persistTraceEvent,
-          isSettled: isTrueForgeTurnSettled
+          isSettled: isTrueForgeTurnSettled,
+          ignoreEvents: events
         });
         events = [...events, ...recoveryEvents];
         completed = events.some((event) => event.type === "turn.done");
@@ -2476,7 +2437,12 @@ async function monitorTrueForgeTurn(
     const pendingApproval = result?.candidatePatch
       ? extractTrueForgePendingApproval(events, activeTurnId, result.candidatePatch.hash)
       : undefined;
-    const validResult = Boolean(result && (!result.candidatePatch || pendingApproval || hasGenuineProof(result)));
+    const requiresExecutableProof = Boolean(result && (result.status === "verified" || result.candidatePatch));
+    const validResult = Boolean(
+      result &&
+      (!requiresExecutableProof || (hasGenuineProof(result) && hasExecutableProof(eventMetadata))) &&
+      (!result.candidatePatch || pendingApproval)
+    );
     let run = record.run;
     if (settled && validResult && result) {
       run = applyLiveProofResult(run, result);
@@ -2494,8 +2460,8 @@ async function monitorTrueForgeTurn(
       run,
       trueForge: {
         ...liveRecord.trueForge,
-        status: pendingApproval ? "paused" : (result?.candidatePatch && hasGenuineProof(result)) ? "paused" : completed ? "completed" : "started",
-        ...(pendingApproval || (result?.candidatePatch && hasGenuineProof(result))
+        status: pendingApproval ? "paused" : completed ? "completed" : "started",
+        ...(pendingApproval
           ? { error: undefined }
           : settled
             ? validResult
@@ -2746,6 +2712,7 @@ function redactHarnessText(value: string): string {
 }
 
 function extractLiveProofResult(events: TrueForgeRuntimeEvent[], record: PersistedWebhookRunRecord): LiveProofResult | undefined {
+  const submittedResult = extractSubmittedByterResult(events);
   const doneEvents = events.filter((event) => event.type === "turn.done").reverse();
   const streamedDeltaText = joinBoundedTexts(
     events
@@ -2762,7 +2729,7 @@ function extractLiveProofResult(events: TrueForgeRuntimeEvent[], record: Persist
       .flatMap((event) => resultOutputTexts(event.raw)),
     ...[...events].reverse().flatMap((event) => resultOutputTexts(event.raw))
   ];
-  const parsed = outputTexts
+  const parsed = submittedResult ?? outputTexts
     .map((outputText) => parseResultJson(clampText(outputText, maxResultTextBytes)))
     .find((candidate): candidate is Record<string, unknown> => candidate !== undefined);
   if (!parsed) {
@@ -2786,6 +2753,10 @@ function extractLiveProofResult(events: TrueForgeRuntimeEvent[], record: Persist
       : undefined;
   const status = parseLiveResultStatus(parsed.status) ?? (rawCandidatePatch ? "patch-ready" : undefined);
   if (!status) {
+    return undefined;
+  }
+  if ((status === "patch-ready" || status === "verified") && !submittedResult) {
+    console.error("TrueForge positive proof was not submitted through submit_byter_result");
     return undefined;
   }
 
@@ -2820,6 +2791,22 @@ function extractLiveProofResult(events: TrueForgeRuntimeEvent[], record: Persist
     ...(proof && Object.keys(proof).length > 0 ? { proof } : {}),
     ...(candidatePatch ? { candidatePatch } : {})
   };
+}
+
+function extractSubmittedByterResult(events: TrueForgeRuntimeEvent[]): Record<string, unknown> | undefined {
+  for (const event of [...events].reverse()) {
+    if (event.type !== "model.message") continue;
+    const raw = unwrapRuntimeEvent(event.raw);
+    if (!isRecord(raw)) continue;
+    const toolCalls = Array.isArray(raw.toolCalls) ? raw.toolCalls : Array.isArray(raw.tool_calls) ? raw.tool_calls : [];
+    for (const toolCall of [...toolCalls].reverse()) {
+      if (!isRecord(toolCall) || !isRecord(toolCall.function)) continue;
+      if (typeof toolCall.function.name !== "string" || !toolCall.function.name.endsWith("submit_byter_result")) continue;
+      const submitted = parseToolArguments(toolCall.function.arguments);
+      if (isByterResultContract(submitted)) return submitted;
+    }
+  }
+  return undefined;
 }
 
 async function hydratePatchEvidence(

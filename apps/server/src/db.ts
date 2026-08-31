@@ -3,10 +3,14 @@ const { Pool } = pg;
 import { randomUUID } from "node:crypto";
 
 export interface PersistedApprovalReceipt {
-  resolvedAt: string;
+  id?: string;
+  resolvedAt?: string;
+  savedAt?: string;
   runId: string;
   actionId: string;
   patchHash: string;
+  resultStatus?: string;
+  message?: string;
   pullRequest?: { number: number; url: string };
   reason?: string;
   decision?: "allow" | "deny";
@@ -201,6 +205,19 @@ export class PostgresStore {
        VALUES ($1, $2, $3)`,
       [id, receipt.runId, JSON.stringify(receipt)]
     );
+  }
+
+  async findApprovalReceipt(runId: string, actionId: string, patchHash: string): Promise<PersistedApprovalReceipt | undefined> {
+    const res = await this.pool.query(
+      `SELECT receipt FROM approval_receipts
+       WHERE run_id = $1
+         AND receipt->>'actionId' = $2
+         AND receipt->>'patchHash' = $3
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [runId, actionId, patchHash]
+    );
+    return res.rows[0]?.receipt;
   }
 
   async close(): Promise<void> {

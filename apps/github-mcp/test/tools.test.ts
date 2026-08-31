@@ -54,6 +54,25 @@ describe("GitHub MCP tools", () => {
     expect(client.addLabels).not.toHaveBeenCalled();
   });
 
+  it("rejects placeholder proof before it can reach approval", async () => {
+    const tools = createGitHubMcpTools({ client: {} as never });
+
+    await expect(tools.callTool({
+      name: "submit_byter_result",
+      arguments: {
+        kind: "byter.result",
+        status: "patch-ready",
+        summary: "...",
+        proof: { before: "...", after: "...", regressions: "...", attempts: "3/3" },
+        candidatePatch: {
+          title: "...",
+          body: "...",
+          files: [{ path: "src/file.ts", content: "full file content" }]
+        }
+      }
+    })).rejects.toThrow("concrete non-placeholder text argument: summary");
+  });
+
   it("blocks writes without approval", async () => {
     const client = { addLabels: vi.fn() };
     const tools = createGitHubMcpTools({ client: client as never });

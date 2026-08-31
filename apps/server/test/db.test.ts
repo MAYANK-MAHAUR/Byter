@@ -47,6 +47,11 @@ describe("PostgresStore unit tests", () => {
       if (sql.includes("INSERT INTO approval_receipts")) {
         return { rowCount: 1, rows: [] };
       }
+      if (sql.includes("SELECT receipt FROM approval_receipts")) {
+        return params?.[0] === "run-1"
+          ? { rowCount: 1, rows: [{ receipt: { runId: "run-1", actionId: "approve-pr", patchHash: "abc", resultStatus: "pr-created" } }] }
+          : { rowCount: 0, rows: [] };
+      }
       return { rowCount: 0, rows: [] };
     });
 
@@ -105,6 +110,9 @@ describe("PostgresStore unit tests", () => {
       resolvedAt: new Date().toISOString()
     });
     expect(queryMock).toHaveBeenCalledWith(expect.stringContaining("INSERT INTO approval_receipts"), expect.any(Array));
+
+    const receipt = await store.findApprovalReceipt("run-1", "approve-pr", "abc");
+    expect(receipt?.resultStatus).toBe("pr-created");
 
     await store.close();
     expect(mockPool.end).toHaveBeenCalled();

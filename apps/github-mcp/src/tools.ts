@@ -320,22 +320,33 @@ function expectByterResult(args: Record<string, unknown>): void {
   ) {
     throw new Error("Expected a valid Byter result status");
   }
-  expectString(args.summary, "summary");
+  const positiveProof = args.status === "patch-ready" || args.status === "verified";
+  if (positiveProof) expectMeaningfulText(args.summary, "summary", 20);
+  else expectString(args.summary, "summary");
   if (!args.proof || typeof args.proof !== "object" || Array.isArray(args.proof)) {
     throw new Error("Expected proof object");
   }
   const proof = args.proof as Record<string, unknown>;
-  expectString(proof.before, "proof.before");
-  expectString(proof.after, "proof.after");
-  expectString(proof.regressions, "proof.regressions");
-  expectString(proof.attempts, "proof.attempts");
+  if (positiveProof) {
+    expectMeaningfulText(proof.before, "proof.before", 6);
+    expectMeaningfulText(proof.after, "proof.after", 6);
+    expectMeaningfulText(proof.regressions, "proof.regressions", 6);
+    if (!hasThreeMatchingAttempts(expectMeaningfulText(proof.attempts, "proof.attempts", 3))) {
+      throw new Error("Expected proof.attempts to report at least 3/3 matching executions");
+    }
+  } else {
+    expectString(proof.before, "proof.before");
+    expectString(proof.after, "proof.after");
+    expectString(proof.regressions, "proof.regressions");
+    expectString(proof.attempts, "proof.attempts");
+  }
   if (args.candidatePatch === null) return;
   if (!args.candidatePatch || typeof args.candidatePatch !== "object" || Array.isArray(args.candidatePatch)) {
     throw new Error("Expected candidatePatch object or null");
   }
   const patch = args.candidatePatch as Record<string, unknown>;
-  expectString(patch.title, "candidatePatch.title");
-  expectString(patch.body, "candidatePatch.body");
+  expectMeaningfulText(patch.title, "candidatePatch.title", 8);
+  expectMeaningfulText(patch.body, "candidatePatch.body", 12);
   expectPatchFiles(patch.files);
 }
 
@@ -351,8 +362,8 @@ function expectPatchFiles(value: unknown) {
 
     const record = file as Record<string, unknown>;
     return {
-      path: expectString(record.path, `files[${index}].path`),
-      content: expectString(record.content, `files[${index}].content`),
+      path: expectMeaningfulText(record.path, `files[${index}].path`, 3),
+      content: expectMeaningfulText(record.content, `files[${index}].content`, 4),
       sha: typeof record.sha === "string" ? record.sha : undefined
     };
   });
@@ -364,6 +375,20 @@ function expectString(value: unknown, name: string): string {
   }
 
   return value;
+}
+
+function expectMeaningfulText(value: unknown, name: string, minimumLength: number): string {
+  const original = expectString(value, name);
+  const text = original.trim();
+  if (text.length < minimumLength || /^(?:\.{3}|…|todo|tbd|n\/?a|placeholder|full file content)$/i.test(text)) {
+    throw new Error(`Expected concrete non-placeholder text argument: ${name}`);
+  }
+  return original;
+}
+
+function hasThreeMatchingAttempts(value: string): boolean {
+  const match = value.match(/(?:^|\D)(\d+)\s*\/\s*(\d+)(?:\D|$)/);
+  return Boolean(match && Number(match[1]) >= 3 && match[1] === match[2]);
 }
 
 function expectNumber(value: unknown, name: string): number {

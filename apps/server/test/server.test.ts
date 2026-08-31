@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { AddressInfo } from "node:net";
@@ -7,6 +7,38 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createByterServer } from "../src/server.js";
 import { signWebhookPayload } from "@byter/github";
+
+function executableProofEvents(prefix: string, sequenceNumber: number) {
+  return [
+    { sequenceNumber, type: "model.message", raw: { event: {
+      id: `${prefix}-sandbox-command`,
+      type: "model.message",
+      toolCalls: [{
+        id: `${prefix}-sandbox-call`,
+        type: "function",
+        function: { name: "exec", arguments: JSON.stringify({ command: "node --experimental-strip-types repro.ts" }) }
+      }]
+    } } },
+    { sequenceNumber: sequenceNumber + 1, type: "tool.response", raw: { event: {
+      id: `${prefix}-sandbox-response`,
+      type: "tool.response",
+      toolCallId: `${prefix}-sandbox-call`,
+      content: JSON.stringify({ exitCode: 0, stdout: "The focused reproducer passed 3/3 matching executions." })
+    } } }
+  ];
+}
+
+function submittedResultEvent(prefix: string, sequenceNumber: number, result: string) {
+  return { sequenceNumber, type: "model.message", raw: { event: {
+    id: `${prefix}-result-event`,
+    type: "model.message",
+    toolCalls: [{
+      id: `${prefix}-result-call`,
+      type: "function",
+      function: { name: "submit_byter_result", arguments: result }
+    }]
+  } } };
+}
 
 describe("Byter production server", () => {
   let baseUrl: string;
@@ -353,7 +385,7 @@ describe("Byter production server", () => {
       expect(latest.trueForge.turn).toBeUndefined();
       expect(JSON.stringify(latest)).not.toContain("do-not-persist");
       expect(githubClient.createIssueComment).toHaveBeenCalledTimes(2);
-      expect(githubClient.createIssueComment.mock.calls[1]?.[3]).toContain("No genuine proof contract was returned");
+      expect(githubClient.createIssueComment.mock.calls[1]?.[3]).toContain("complete proof-and-approval contract");
       expect(githubClient.addLabels).toHaveBeenCalledWith("o", "r", 20, ["byter:triaging"]);
       await expect(readFile(join(liveDataDir, "webhook-runs.jsonl"), "utf8")).resolves.toContain("session-live-1");
     } finally {
@@ -386,6 +418,27 @@ describe("Byter production server", () => {
       body: "Verified by recovery.",
       files: [{ path: "src/parser.ts", content: "export const fixed = true;\n" }]
     };
+    const initialDoneEvent = { sequenceNumber: 1, type: "turn.done", raw: { state: { status: "done" } } };
+    const recoveryEvents = [
+      ...executableProofEvents("recovery", 2),
+      submittedResultEvent("recovery", 4, recoveryResult),
+      { sequenceNumber: 5, type: "model.message", raw: { event: {
+        id: "recovery-write-event",
+        type: "model.message",
+        toolCalls: [{
+          id: "recovery-write-call",
+          type: "function",
+          function: { name: "create_fix_pull_request", arguments: JSON.stringify(writeArguments) }
+        }]
+      } } },
+      { sequenceNumber: 6, type: "tool.approval_required", raw: { event: {
+        id: "recovery-approval-event",
+        type: "tool.approval_required",
+        threadId: "recovery-thread",
+        toolCalls: [{ id: "recovery-write-call", sourceEventId: "recovery-write-event" }]
+      } } }
+    ];
+    let listedRecoveryEvents = false;
     const trueForgeRuntime = {
       startSession: vi.fn().mockResolvedValue({
         session: { id: "session-recovery-1", title: null },
@@ -398,34 +451,16 @@ describe("Byter production server", () => {
       }),
       subscribeToTurn: vi.fn().mockImplementation(async (_sessionId: string, turnId: string) => {
         if (turnId === "turn-recovery-1") {
-          return [{ sequenceNumber: 1, type: "turn.done", raw: { state: { status: "done" } } }];
+          return [initialDoneEvent];
         }
-        return [
-          { sequenceNumber: 2, type: "model.message", raw: { event: {
-            id: "recovery-result-event",
-            type: "model.message",
-            toolCalls: [{
-              id: "recovery-result-call",
-              type: "function",
-              function: { name: "submit_byter_result", arguments: recoveryResult }
-            }]
-          } } },
-          { sequenceNumber: 3, type: "model.message", raw: { event: {
-            id: "recovery-write-event",
-            type: "model.message",
-            toolCalls: [{
-              id: "recovery-write-call",
-              type: "function",
-              function: { name: "create_fix_pull_request", arguments: JSON.stringify(writeArguments) }
-            }]
-          } } },
-          { sequenceNumber: 4, type: "tool.approval_required", raw: { event: {
-            id: "recovery-approval-event",
-            type: "tool.approval_required",
-            threadId: "recovery-thread",
-            toolCalls: [{ id: "recovery-write-call", sourceEventId: "recovery-write-event" }]
-          } } }
-        ];
+        throw new Error("Recovery stream disconnected");
+      }),
+      listSessionEvents: vi.fn().mockImplementation(async () => {
+        if (!listedRecoveryEvents) {
+          listedRecoveryEvents = true;
+          return [initialDoneEvent];
+        }
+        return [initialDoneEvent, ...recoveryEvents];
       })
     };
     const githubClient = {
@@ -473,6 +508,7 @@ describe("Byter production server", () => {
       }
       expect(trueForgeRuntime.requestProofContract).toHaveBeenCalledWith("session-recovery-1");
       expect(trueForgeRuntime.subscribeToTurn).toHaveBeenCalledTimes(2);
+      expect(trueForgeRuntime.listSessionEvents).toHaveBeenCalledTimes(2);
       expect(latest.run.status).toBe("awaiting-approval");
       expect(latest.trueForge.status).toBe("paused");
       expect(latest.trueForge.error).toBeUndefined();
@@ -507,7 +543,9 @@ describe("Byter production server", () => {
         { sequenceNumber: 1, type: "turn.done", raw: { state: { status: "done", output: null } } }
       ]),
       listSessionEvents: vi.fn().mockResolvedValue([
-        { sequenceNumber: 2, type: "turn.done", raw: { state: { status: "done", output: { content: recoveryResult } } } }
+        ...executableProofEvents("refresh", 2),
+        submittedResultEvent("refresh", 4, recoveryResult),
+        { sequenceNumber: 5, type: "turn.done", raw: { state: { status: "done", output: { content: recoveryResult } } } }
       ])
     };
     const githubClient = {
@@ -557,6 +595,76 @@ describe("Byter production server", () => {
       expect(latest.run.status).toBe("verified");
       expect(latest.trueForge.result.status).toBe("verified");
       expect(githubClient.addLabels).toHaveBeenCalledWith("o", "r", 23, ["byter:verified"]);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    }
+  });
+
+  it("rejects a positive patch result without the mandatory TrueForge approval checkpoint", async () => {
+    const staticDir = await mkdtemp(join(tmpdir(), "byter-static-"));
+    const liveDataDir = await mkdtemp(join(tmpdir(), "byter-data-"));
+    await writeFile(join(staticDir, "index.html"), "<main>Byter</main>", "utf8");
+    const proofText = JSON.stringify({
+      kind: "byter.result",
+      status: "patch-ready",
+      summary: "The focused reproducer failed before the verified tokenizer fix.",
+      proof: { before: "3/3 failed", after: "3/3 passed", regressions: "2/2 passed", attempts: "3/3" },
+      candidatePatch: {
+        title: "Preserve escaped literal case",
+        body: "Keep escaped uppercase literals unchanged.",
+        files: [{ path: "demo/buggy-parser/src/tokenizer.ts", content: "export const fixed = true;\n" }]
+      }
+    });
+    const trueForgeRuntime = {
+      startSession: vi.fn().mockResolvedValue({
+        session: { id: "session-no-checkpoint", title: null },
+        turn: { id: "turn-no-checkpoint", sessionId: "session-no-checkpoint", status: "running" }
+      }),
+      subscribeToTurn: vi.fn().mockResolvedValue([
+        ...executableProofEvents("no-checkpoint", 1),
+        submittedResultEvent("no-checkpoint", 3, proofText),
+        { sequenceNumber: 4, type: "turn.done", raw: { event: { id: "no-checkpoint-done", type: "turn.done" } } }
+      ])
+    };
+    const githubClient = {
+      createIssueComment: vi.fn().mockResolvedValue({ id: 704, html_url: "https://github.test/issues/24#issuecomment-704" }),
+      updateIssueComment: vi.fn().mockImplementation(async (_owner: string, _repo: string, id: number) => ({ id, html_url: "https://github.test/issues/24#issuecomment-704" })),
+      addLabels: vi.fn().mockResolvedValue(undefined),
+      removeLabel: vi.fn().mockResolvedValue(undefined)
+    } as any;
+    const server = createByterServer({ staticDir, dataDir: liveDataDir, trueForgeRuntime, githubClient });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address() as AddressInfo;
+    const isolatedBaseUrl = `http://127.0.0.1:${address.port}`;
+    const payload = JSON.stringify({
+      action: "opened",
+      issue: { number: 24, title: "Escaped literal case", body: "Uppercase escapes are lowercased.", html_url: "https://github.test/o/r/issues/24" },
+      repository: { name: "r", full_name: "o/r", default_branch: "main", owner: { login: "o" } }
+    });
+
+    try {
+      const response = await fetch(`${isolatedBaseUrl}/api/github/webhook`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-GitHub-Event": "issues",
+          "X-GitHub-Delivery": "delivery-no-checkpoint-24",
+          "X-Hub-Signature-256": signWebhookPayload(payload, "webhook-secret")
+        },
+        body: payload
+      });
+      expect(response.status).toBe(202);
+
+      let latest: any;
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        latest = await fetch(`${isolatedBaseUrl}/api/runs/latest`).then((latestResponse) => latestResponse.json());
+        if (latest.run.status === "failed") break;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(latest.run.status).toBe("failed");
+      expect(latest.trueForge.error).toContain("native approval checkpoint");
+      expect(githubClient.addLabels).not.toHaveBeenCalledWith("o", "r", 24, ["byter:verified"]);
+      expect(githubClient.updateIssueComment.mock.calls.at(-1)?.[3]).toContain("complete proof-and-approval contract");
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     }
@@ -624,7 +732,9 @@ describe("Byter production server", () => {
               type: "model.message.delta",
               content: `${proofText.slice(Math.ceil(proofText.length / 2))}\n\`\`\``
             } } },
-            { sequenceNumber: 3, type: "model.message", raw: { event: {
+            ...executableProofEvents("proof", 3),
+            submittedResultEvent("proof", 5, proofText),
+            { sequenceNumber: 6, type: "model.message", raw: { event: {
               id: "event-write-1",
               type: "model.message",
               toolCalls: [{
@@ -633,7 +743,7 @@ describe("Byter production server", () => {
                 function: { name: "create_fix_pull_request", arguments: JSON.stringify(writeArguments) }
               }]
             } } },
-            { sequenceNumber: 4, type: "tool.approval_required", raw: { event: {
+            { sequenceNumber: 7, type: "tool.approval_required", raw: { event: {
               id: "event-approval-1",
               type: "tool.approval_required",
               threadId: "thread-write-1",
@@ -737,6 +847,9 @@ describe("Byter production server", () => {
       const interruptedLines = (await readFile(join(liveDataDir, "webhook-runs.jsonl"), "utf8")).trim().split("\n");
       const interruptedRecord = JSON.parse(interruptedLines.at(-1)!);
       expect(interruptedRecord.trueForge.pendingApproval.approvalTurnId).toBe("turn-approval-1");
+      const approvalReceiptLines = (await readFile(join(liveDataDir, "approvals.jsonl"), "utf8")).trim().split("\n");
+      const writingReceipt = approvalReceiptLines.map((line) => JSON.parse(line)).find((receipt) => receipt.resultStatus === "writing");
+      await appendFile(join(liveDataDir, "approvals.jsonl"), `${JSON.stringify(writingReceipt)}\n`, "utf8");
 
       const approval = await fetch(`${isolatedBaseUrl}/api/github/webhook`, {
         method: "POST",
@@ -941,7 +1054,9 @@ describe("Byter production server", () => {
         type: "model.message.delta",
         content: `Proof complete:\n\`\`\`json\n${proofText}\n\`\`\``
       } } },
-      { sequenceNumber: 2, type: "model.message", raw: { event: {
+      ...executableProofEvents("reconcile", 2),
+      submittedResultEvent("reconcile", 4, proofText),
+      { sequenceNumber: 5, type: "model.message", raw: { event: {
         id: "event-write-55",
         type: "model.message",
         toolCalls: [{
@@ -950,7 +1065,7 @@ describe("Byter production server", () => {
           function: { name: "create_fix_pull_request", arguments: JSON.stringify(writeArguments) }
         }]
       } } },
-      { sequenceNumber: 3, type: "tool.approval_required", raw: { event: {
+      { sequenceNumber: 6, type: "tool.approval_required", raw: { event: {
         id: "event-approval-55",
         type: "tool.approval_required",
         threadId: "thread-write-55",
