@@ -1550,9 +1550,10 @@ export function buildGitHubStatusComment(record: PersistedWebhookRunRecord, kind
       "",
       "> No genuine proof contract was returned. No verified label or repository mutation was made.",
       "",
-      `**Failure reason:** ${safeCommentText(failureReason, 280)}`,
+      "### Failure details",
+      safeCommentMarkdown(failureReason, 4000),
       "",
-      "Review the run for bounded failure details."
+      `**[View full investigation trace →](${runUrl})**`
     );
   }
   if (pullRequest) {
