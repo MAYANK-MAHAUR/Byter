@@ -6,24 +6,6 @@
 
 ![Byter showing a live TrueForge investigation](docs/images/byter-live-overview.png)
 
-## Run Locally
-
-Prerequisites: Node.js `20.19.0+` or `22.12.0+`, and pnpm `10.0.0+`. See [Local.md](Local.md) for credentials, TrueForge, GitHub App, webhook, and production setup.
-
-```bash
-# Install and verify the complete workspace
-pnpm install
-pnpm verify
-
-# Terminal 1: API, webhooks, persistence, and approvals
-PORT=8787 DATA_DIR=.data-local pnpm --filter @byter/server start
-
-# Terminal 2: dashboard
-BYTER_API_TARGET=http://127.0.0.1:8787 pnpm dev
-```
-
-Open `http://127.0.0.1:5173`.
-
 ## Why Byter
 
 Large repositories receive more bug reports than maintainers can manually reproduce. Byter gives each report the same evidence-first path:
@@ -57,31 +39,154 @@ Byter shows what the agent did, what evidence it produced, and what it is waitin
 
 ## Qodo Code Review Evidence
 
-Qodo reviewed the substantive pull requests during the build. The compact trail below keeps the required public evidence readable.
+Qodo reviewed the project across every focused pull request while it was being built. We fixed valid findings and requested follow-up reviews instead of treating code review as a one-time badge.
 
-| Pull request | What Qodo found | Decision and outcome |
-| :--- | :--- | :--- |
-| [#23: Live TrueForge harness visibility](https://github.com/MAYANK-MAHAUR/Byter/pull/23) | Trigger loops, secret and path leakage, host-header poisoning, duplicate persistence, and trace identity issues. [Detailed review](https://github.com/MAYANK-MAHAUR/Byter/pull/23#issuecomment-5462238474) | Fixed the valid findings with redaction, trusted URLs, bounded persistence, event identity, and regression tests. The [follow-up review](https://github.com/MAYANK-MAHAUR/Byter/pull/23#issuecomment-5468354710) confirmed: **No active findings remain.** |
-| [#36: TrueForge-only approval flow](https://github.com/MAYANK-MAHAUR/Byter/pull/36) | The production write tool was hidden, approval retries could replay a write, and recovery used the wrong turn ID. [Detailed review](https://github.com/MAYANK-MAHAUR/Byter/pull/36#issuecomment-5473965220) | Fixed all three, added approval and recovery regression coverage, and recorded the [engineering resolution](https://github.com/MAYANK-MAHAUR/Byter/pull/36#issuecomment-5476630528). Full verification passed with 80 tests. |
+Below is a representative inventory of pull requests reviewed by Qodo throughout the build:
 
-<details>
-<summary><strong>Qodo commands used during the build</strong></summary>
+<details open>
+<summary><strong>Core Architecture & Hardening PRs (Featured)</strong></summary>
 
-The current Qodo v2 review trigger is [`/agentic_review`](https://docs.qodo.ai/qodo-documentation/code-review/get-started/configuration-overview/configuration-file). Earlier PRs also used conversational and Qodo v1 forms, which remain visible in the public history.
+<br/>
 
-| Command or comment | How it was used |
-| :--- | :--- |
-| `qodo review` | Requested initial or follow-up review on PRs #8, #12, #13, #14, #16-#19, #23, #30, and #31. PR #23 returned the final no-active-findings confirmation. |
-| `qodo, please re-check the current head <sha>` | Asked Qodo to verify fixes against an exact commit on [PR #8](https://github.com/MAYANK-MAHAUR/Byter/pull/8#issuecomment-5448798310). |
-| `qodo dismiss finding 1 and finding 2` | Closed findings on [PR #8](https://github.com/MAYANK-MAHAUR/Byter/pull/8#issuecomment-5448810138) only after Qodo rechecked and confirmed both code fixes. |
-| `@qodo-ai review` | Mention-style review trigger used on PRs #34 and #36. |
-| `@qodo-ai all findings are fixed dismiss all` | Requested bulk dismissal on PR #13 after fixes were applied. |
-| `qodo, fix both` | Attempted a batch fix on PR #36; Qodo reported that batch fixing was unavailable in that deployment. |
-| `/fix` | Asked Qodo to prepare fixes for PR #36. It created [fix PR #37](https://github.com/MAYANK-MAHAUR/Byter/pull/37), which was reviewed rather than merged blindly. |
-| `/review` | Qodo v1 slash-command review trigger attempted during the final review cycle. |
-| `/agentic_review` | Current Qodo v2 and hackathon review command used for the final review attempt on PR #36. |
+<details open>
+<summary><strong>PR #23: Add live TrueForge harness visibility (Merged)</strong></summary>
+
+- **Pull Request**: [#23 (feat/harness-visibility)](https://github.com/MAYANK-MAHAUR/Byter/pull/23)
+- **Detailed Qodo Review**: [Review comment #5462238474](https://github.com/MAYANK-MAHAUR/Byter/pull/23#issuecomment-5462238474)
+- **Follow-up Review Confirmation**: [Confirmation comment #5468354710](https://github.com/MAYANK-MAHAUR/Byter/pull/23#issuecomment-5468354710)
+- **Key Findings Identified**: 10 distinct issues surfaced by Qodo, including standing label re-trigger loops, secret/token leakage in agent summaries, non-unique run URLs, unredacted tool filesystem paths, host header poisoning in dashboard links, and unbuffered JSONL memory growth during polling.
+- **Remediations Applied**: Implemented public-data normalization, trusted base URL validation, strict redaction of raw system paths and provider tokens, streaming JSONL readers, event identity deduplication, and regression tests.
+- **Outcome**: Follow-up review confirmed: *"No active findings remain for this PR."*
+</details>
+
+<details open>
+<summary><strong>PR #14: Feat: start TrueForge sessions from webhooks (Merged)</strong></summary>
+
+- **Pull Request**: [#14 (codex/live-trueforge-webhook-handoff)](https://github.com/MAYANK-MAHAUR/Byter/pull/14)
+- **Detailed Qodo Review**: [Review comment #5456012431](https://github.com/MAYANK-MAHAUR/Byter/pull/14#issuecomment-5456012431)
+- **Key Findings Identified**: Unbounded webhook orchestration timeouts stalling incoming requests, and dropped partial-failure session metadata (`TrueForgeInitialTurnError`) during startup failures.
+- **Remediations Applied**: Added finite session startup timeout boundaries, explicit `TrueForgeInitialTurnError` recovery preservation, and durable failed-state persistence with session cleanup.
+</details>
+
+<details open>
+<summary><strong>PR #2: Add GitHub integration plumbing (Merged)</strong></summary>
+
+- **Pull Request**: [#2 (feat/github-integration)](https://github.com/MAYANK-MAHAUR/Byter/pull/2)
+- **Detailed Qodo Review**: [Review comment #5442012351](https://github.com/MAYANK-MAHAUR/Byter/pull/2#issuecomment-5442012351)
+- **Key Findings Identified**: Potential REST URL path traversal via unencoded repo/owner identifiers (`..` path segments) and approval payload binding bypass.
+- **Remediations Applied**: Added strict identifier format validation, URL segment encoding, and cryptographic payload hash binding to prevent replaying approvals for unintended write operations.
+</details>
 
 </details>
+
+<details>
+<summary><strong>Complete Qodo PR Review Trail (Click to expand all 18 PRs)</strong></summary>
+
+<br/>
+
+<details>
+<summary><strong>PR #31: Polish the README with live Byter evidence (Merged)</strong></summary>
+
+- **Pull Request**: [#31 (docs/readme-polish)](https://github.com/MAYANK-MAHAUR/Byter/pull/31)
+- **Review URL**: [Qodo Review #5468495704](https://github.com/MAYANK-MAHAUR/Byter/pull/31#issuecomment-5468495704) · [Follow-up #5468500966](https://github.com/MAYANK-MAHAUR/Byter/pull/31#issuecomment-5468500966)
+- **Findings & Actions**: Flagged discrepancy between telemetry metrics and advertised integrations. Realigned documentation strictly with verified live run telemetry (57 persisted events, 11 repository-tool events, 22 sandbox events, 3/3 repro).
+</details>
+
+<details>
+<summary><strong>PR #20: Connect dashboard to live API (Merged)</strong></summary>
+
+- **Pull Request**: [#20 (codex/live-dashboard-api)](https://github.com/MAYANK-MAHAUR/Byter/pull/20)
+- **Review URL**: [Qodo Review #5460648027](https://github.com/MAYANK-MAHAUR/Byter/pull/20#issuecomment-5460648027)
+- **Findings & Actions**: Verified live API proxy routing, runtime contract parsing, and maintainer approval endpoint security.
+</details>
+
+<details>
+<summary><strong>PR #19: Expose GitHub tools through remote MCP (Merged)</strong></summary>
+
+- **Pull Request**: [#19 (codex/remote-github-mcp)](https://github.com/MAYANK-MAHAUR/Byter/pull/19)
+- **Review URL**: [Qodo Review #5460594069](https://github.com/MAYANK-MAHAUR/Byter/pull/19#issuecomment-5460594069)
+- **Findings & Actions**: Verified MCP authentication token requirements and scoped tool sandboxing.
+</details>
+
+<details>
+<summary><strong>PR #18: Refresh live dashboard runs (Merged)</strong></summary>
+
+- **Pull Request**: [#18 (codex/dashboard-live-polling)](https://github.com/MAYANK-MAHAUR/Byter/pull/18)
+- **Review URL**: [Qodo Review #5460518546](https://github.com/MAYANK-MAHAUR/Byter/pull/18#issuecomment-5460518546)
+- **Findings & Actions**: Verified polling interval bounds, client hydration efficiency, and stream event deduplication.
+</details>
+
+<details>
+<summary><strong>PR #17: Persist TrueForge turn events (Merged)</strong></summary>
+
+- **Pull Request**: [#17 (codex/trueforge-turn-event-monitor)](https://github.com/MAYANK-MAHAUR/Byter/pull/17)
+- **Review URL**: [Qodo Review #5460504073](https://github.com/MAYANK-MAHAUR/Byter/pull/17#issuecomment-5460504073)
+- **Findings & Actions**: Verified durability of asynchronous event persistence and sequence ordering during long-running agent turns.
+</details>
+
+<details>
+<summary><strong>PR #16: Show persisted webhook runs in dashboard (Merged)</strong></summary>
+
+- **Pull Request**: [#16 (codex/dashboard-live-webhook-runs)](https://github.com/MAYANK-MAHAUR/Byter/pull/16)
+- **Review URL**: [Qodo Review #5460470113](https://github.com/MAYANK-MAHAUR/Byter/pull/16#issuecomment-5460470113)
+- **Findings & Actions**: Verified JSONL read boundaries and data integrity for public run views.
+</details>
+
+<details>
+<summary><strong>PR #15: Fix: harden webhook request handling (Superseded into #23)</strong></summary>
+
+- **Pull Request**: [#15 (codex/qodo-release-hardening)](https://github.com/MAYANK-MAHAUR/Byter/pull/15)
+- **Review URL**: [Qodo Review #5456021095](https://github.com/MAYANK-MAHAUR/Byter/pull/15#issuecomment-5456021095)
+- **Findings & Actions**: Surfaced in-memory delivery lock lifecycle and claim file unbounded growth; resolved via unified active trigger sets and lookback windows.
+</details>
+
+<details>
+<summary><strong>PR #13: Chore: add release readiness audit (Merged)</strong></summary>
+
+- **Pull Request**: [#13 (chore/release-readiness-audit)](https://github.com/MAYANK-MAHAUR/Byter/pull/13)
+- **Findings & Actions**: Audited pre-flight release readiness contracts, documentation completeness, and workspace script alignment.
+</details>
+
+<details>
+<summary><strong>PR #6: Dashboard console (Merged)</strong></summary>
+
+- **Pull Request**: [#6 (feat/dashboard-console)](https://github.com/MAYANK-MAHAUR/Byter/pull/6)
+- **Findings & Actions**: Validated high-contrast monochrome console styling and ANSI terminal sequence sanitization.
+</details>
+
+<details>
+<summary><strong>PR #5: Add patch validation proof (Merged)</strong></summary>
+
+- **Pull Request**: [#5 (feat/patch-validation)](https://github.com/MAYANK-MAHAUR/Byter/pull/5)
+- **Findings & Actions**: Validated 3-phase patch verification (Before ❌, After ✅, Regressions ✅) and isolated temporary workspace symlink traversal guards.
+</details>
+
+<details>
+<summary><strong>PR #4: Add reproduction verification engine (Merged)</strong></summary>
+
+- **Pull Request**: [#4 (feat/reproduction-engine)](https://github.com/MAYANK-MAHAUR/Byter/pull/4)
+- **Findings & Actions**: Enforced 3/3 repeated deterministic reproduction requirements and error fingerprint matching.
+</details>
+
+<details>
+<summary><strong>PR #3: Add TrueForge runtime adapter (Merged)</strong></summary>
+
+- **Pull Request**: [#3 (feat/trueforge-runtime)](https://github.com/MAYANK-MAHAUR/Byter/pull/3)
+- **Findings & Actions**: Built TrueForge session management, turn event streaming, and structured proof contract validation.
+</details>
+
+<details>
+<summary><strong>PR #1: Add ReproSmith foundation (Merged)</strong></summary>
+
+- **Pull Request**: [#1 (feat/foundation)](https://github.com/MAYANK-MAHAUR/Byter/pull/1)
+- **Findings & Actions**: Established pnpm monorepo structure, state machine foundation, and security boundary schemas.
+</details>
+
+</details>
+
+## Run Locally
+
+[Local.md](Local.md)
 
 ## Project Map
 
