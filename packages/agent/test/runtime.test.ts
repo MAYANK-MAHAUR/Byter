@@ -26,16 +26,7 @@ describe("Byter TrueForge runtime", () => {
     const spec = buildByterAgentSpec(config);
 
     expect(spec.model.name).toBe("agentrouter/glm-5.3");
-    expect(spec.responseFormat).toMatchObject({
-      type: "json_schema",
-      jsonSchema: {
-        name: "byter_result",
-        strict: true,
-        schema: expect.objectContaining({
-          required: expect.arrayContaining(["kind", "status", "summary", "proof"])
-        })
-      }
-    });
+    expect(spec).not.toHaveProperty("responseFormat");
     expect(spec.config.askUserQuestions.enabled).toBe(false);
     expect(spec.config.generativeUi.enabled).toBe(false);
     expect(spec.config.dynamicSubAgents.enabled).toBe(true);

@@ -1,70 +1,10 @@
 import type { StartByterSessionInput, TrueForgeRuntimeConfig } from "./types.js";
 
-const byterResultSchema = {
-  type: "json_schema" as const,
-  jsonSchema: {
-    name: "byter_result",
-    description: "Executable evidence and, only when verified, a complete candidate patch.",
-    strict: true,
-    schema: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        kind: { type: "string", const: "byter.result" },
-        status: {
-          type: "string",
-          enum: ["patch-ready", "verified", "not-reproduced", "blocked", "failed"]
-        },
-        summary: { type: "string", description: "Concise, public-safe GitHub-flavored Markdown summary." },
-        proof: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            before: { type: "string", description: "Concise GitHub-flavored Markdown describing the verified pre-fix failure." },
-            after: { type: "string", description: "Concise GitHub-flavored Markdown describing post-fix validation." },
-            regressions: { type: "string", description: "Concise GitHub-flavored Markdown describing focused regression checks." },
-            attempts: { type: "string", description: "Short reproduction count, for example `3/3 matching failures`." }
-          },
-          required: ["before", "after", "regressions", "attempts"]
-        },
-        candidatePatch: {
-          anyOf: [
-            {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                title: { type: "string" },
-                body: { type: "string", description: "Concise, public-safe GitHub-flavored Markdown explaining the proposed remedy." },
-                files: {
-                  type: "array",
-                  items: {
-                    type: "object",
-                    additionalProperties: false,
-                    properties: {
-                      path: { type: "string" },
-                      content: { type: "string" }
-                    },
-                    required: ["path", "content"]
-                  }
-                }
-              },
-              required: ["title", "body", "files"]
-            },
-            { type: "null" }
-          ]
-        }
-      },
-      required: ["kind", "status", "summary", "proof", "candidatePatch"]
-    }
-  }
-};
-
 export function buildByterAgentSpec(config: TrueForgeRuntimeConfig) {
   return {
     model: {
       name: `${config.modelProvider ?? "custom"}/${config.modelName}`
     },
-    responseFormat: byterResultSchema,
     instructions: [
       "You are Byter, CI for bug reports.",
       "Do not mark a bug verified from model confidence.",

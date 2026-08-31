@@ -297,7 +297,7 @@ describe("Byter production server", () => {
     expect((await response.json()).ignored).not.toBe(true);
   });
 
-  it("starts a TrueForge session for safe signed GitHub issue webhooks", async () => {
+  it("surfaces a non-recoverable TrueForge provider error without retrying", async () => {
     const staticDir = await mkdtemp(join(tmpdir(), "byter-static-"));
     const liveDataDir = await mkdtemp(join(tmpdir(), "byter-data-"));
     await writeFile(join(staticDir, "index.html"), "<main>Byter</main>", "utf8");
@@ -308,8 +308,12 @@ describe("Byter production server", () => {
       }),
       subscribeToTurn: vi.fn().mockResolvedValue([
         { sequenceNumber: 1, type: "turn.started", raw: { secret: "do-not-persist" } },
-        { sequenceNumber: 2, type: "turn.done", raw: { output: "proof ready" } }
-      ])
+        { sequenceNumber: 2, type: "turn.done", raw: {
+          output: "proof ready",
+          state: { status: "error", message: "Request failed (400): response_format unavailable" }
+        } }
+      ]),
+      requestProofContract: vi.fn()
     };
     const githubClient = {
       createIssueComment: vi.fn().mockResolvedValue({ id: 701, html_url: "https://github.test/issues/20#issuecomment-701" }),
@@ -372,7 +376,8 @@ describe("Byter production server", () => {
       }
       expect(latest.trueForge.status).toBe("completed");
       expect(latest.run.status).toBe("failed");
-      expect(latest.trueForge.error).toContain("valid byter.result contract");
+      expect(latest.trueForge.error).toContain("response_format unavailable");
+      expect(trueForgeRuntime.requestProofContract).not.toHaveBeenCalled();
       expect(latest.trueForge.events).toHaveLength(2);
       expect(latest.trueForge.events.map((event: { type: string }) => event.type)).toEqual(["step.started", "step.done"]);
       expect(latest.trueForge.events[0]).toMatchObject({
@@ -385,7 +390,7 @@ describe("Byter production server", () => {
       expect(latest.trueForge.turn).toBeUndefined();
       expect(JSON.stringify(latest)).not.toContain("do-not-persist");
       expect(githubClient.createIssueComment).toHaveBeenCalledTimes(2);
-      expect(githubClient.createIssueComment.mock.calls[1]?.[3]).toContain("complete proof-and-approval contract");
+      expect(githubClient.createIssueComment.mock.calls[1]?.[3]).toContain("response_format unavailable");
       expect(githubClient.addLabels).toHaveBeenCalledWith("o", "r", 20, ["byter:triaging"]);
       await expect(readFile(join(liveDataDir, "webhook-runs.jsonl"), "utf8")).resolves.toContain("session-live-1");
     } finally {

@@ -2191,6 +2191,23 @@ function isTrueForgeTurnSettled(events: TrueForgeRuntimeEvent[]): boolean {
   return events.some((event) => event.type === "turn.done" || event.type === "tool.approval_required");
 }
 
+function trueForgeTurnError(events: TrueForgeRuntimeEvent[]): string | undefined {
+  for (const event of [...events].reverse()) {
+    if (event.type !== "turn.done") continue;
+    const raw = unwrapRuntimeEvent(event.raw);
+    if (!isRecord(raw) || !isRecord(raw.state) || raw.state.status !== "error") continue;
+    if (typeof raw.state.message === "string" && raw.state.message.trim()) {
+      return clampText(raw.state.message.trim(), 1_000);
+    }
+    return "TrueForge turn ended with an unspecified provider error";
+  }
+  return undefined;
+}
+
+function isRecoverableTrueForgeTurnError(message: string): boolean {
+  return /max[_ -]?tokens?\s+breached|token\s+(?:budget|limit)/i.test(message);
+}
+
 function extractTrueForgePendingApproval(
   events: TrueForgeRuntimeEvent[],
   turnId: string,
@@ -2375,6 +2392,7 @@ async function monitorTrueForgeTurn(
 
     let completed = events.some((event) => event.type === "turn.done");
     let settled = isTrueForgeTurnSettled(events);
+    let turnError = trueForgeTurnError(events);
     let result = settled ? extractLiveProofResult(events, record) : undefined;
     if (result) {
       result = await hydratePatchEvidence(result, record, githubClient);
@@ -2399,7 +2417,11 @@ async function monitorTrueForgeTurn(
     const maxContinuationTurns = 3;
     for (
       let continuationAttempt = 1;
-      completed && !result && trueForgeRuntime.requestProofContract && continuationAttempt <= maxContinuationTurns;
+      completed &&
+        !result &&
+        trueForgeRuntime.requestProofContract &&
+        continuationAttempt <= maxContinuationTurns &&
+        (!turnError || isRecoverableTrueForgeTurnError(turnError));
       continuationAttempt += 1
     ) {
       try {
@@ -2427,6 +2449,7 @@ async function monitorTrueForgeTurn(
         events = [...events, ...recoveryEvents];
         completed = events.some((event) => event.type === "turn.done");
         settled = isTrueForgeTurnSettled(events);
+        turnError = trueForgeTurnError(recoveryEvents);
         result = settled ? extractLiveProofResult(events, record) : undefined;
         if (result) {
           result = await hydratePatchEvidence(result, record, githubClient);
@@ -2458,7 +2481,9 @@ async function monitorTrueForgeTurn(
         "failed",
         result?.candidatePatch
           ? "TrueForge returned a patch without a matching native approval checkpoint"
-          : "TrueForge completed without a valid byter.result contract"
+          : turnError
+            ? `TrueForge turn failed: ${turnError}`
+            : "TrueForge completed without a valid byter.result contract"
       );
     }
     const completedRecord: PersistedWebhookRunRecord = {
@@ -2474,7 +2499,9 @@ async function monitorTrueForgeTurn(
               ? { error: undefined }
               : { error: result?.candidatePatch
                   ? "TrueForge patch did not match a native approval checkpoint"
-                  : "TrueForge completed without a valid byter.result contract" }
+                  : turnError
+                    ? `TrueForge turn failed: ${turnError}`
+                    : "TrueForge completed without a valid byter.result contract" }
           : { error: "TrueForge turn is still running; completion has not been observed" }),
         events: eventMetadata,
         ...(pendingApproval ? { pendingApproval } : {}),
