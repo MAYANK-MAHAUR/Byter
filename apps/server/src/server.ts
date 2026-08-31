@@ -275,11 +275,12 @@ async function handleGitHubWebhook(
     return;
   }
 
+  const isExplicitRetrigger = webhook.action === "reopened";
   const explicitTrigger = hasExplicitTrigger(webhook);
   if (
     (webhook.action === "labeled" && !hasTriggerLabel(webhook)) ||
-    ((webhook.action === "edited" || webhook.action === "reopened") && !explicitTrigger) ||
-    (requiresExplicitTrigger() && !explicitTrigger)
+    (webhook.action === "edited" && !explicitTrigger) ||
+    (!isExplicitRetrigger && requiresExplicitTrigger() && !explicitTrigger)
   ) {
     sendJson(response, 202, {
       ignored: true,
@@ -288,7 +289,6 @@ async function handleGitHubWebhook(
     return;
   }
 
-  const isExplicitRetrigger = webhook.action === "reopened";
   await processIssueWebhook(webhook, deliveryId, response, dataDir, githubClient, trueForgeRuntime, activeIssueTriggers, isExplicitRetrigger);
 }
 
@@ -2910,17 +2910,18 @@ function triggerLabel(): string {
 }
 
 function hasTriggerLabel(webhook: ReturnType<typeof parseIssueWebhook>): boolean {
-  if (webhook.action === "labeled") {
-    return webhook.label?.name === triggerLabel();
+  const target = triggerLabel().toLowerCase();
+  if (webhook.action === "labeled" && webhook.label?.name?.toLowerCase() === target) {
+    return true;
   }
-  return (webhook.issue.labels ?? []).some((label) => (typeof label === "string" ? label : label.name) === triggerLabel());
+  return (webhook.issue.labels ?? []).some((label) => (typeof label === "string" ? label : label.name)?.toLowerCase() === target);
 }
 
 function hasExplicitTrigger(webhook: ReturnType<typeof parseIssueWebhook>): boolean {
   if (/(^|\n)\/byter\s+run(?:\s|$)/i.test(webhook.issue.body ?? "")) {
     return true;
   }
-  return (webhook.action === "opened" || webhook.action === "labeled" || webhook.action === "reopened") && hasTriggerLabel(webhook);
+  return hasTriggerLabel(webhook);
 }
 
 function resultStatusFor(actionId: ApprovalActionId) {
