@@ -128,7 +128,18 @@ export function createGitHubMcpTools({ client }: GitHubMcpServerOptions) {
 
         case "submit_byter_result": {
           expectByterResult(call.arguments);
-          return textResult(JSON.stringify({ accepted: true }));
+          const isPatchReady = call.arguments.status === "patch-ready";
+          return textResult(
+            JSON.stringify({
+              accepted: true,
+              ...(isPatchReady
+                ? {
+                    instruction:
+                      "For a patch-ready result, you MUST now immediately call the create_fix_pull_request MCP tool to initiate the maintainer approval checkpoint."
+                  }
+                : {})
+            })
+          );
         }
 
         case "add_verified_label": {

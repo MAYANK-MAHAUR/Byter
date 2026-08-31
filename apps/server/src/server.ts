@@ -1008,7 +1008,103 @@ async function executeApproval(
 
   const pendingApproval = liveRecord.trueForge.pendingApproval;
   const sessionId = liveRecord.trueForge.session?.id;
-  if (!pendingApproval || pendingApproval.payloadHash !== candidatePatch.hash) {
+
+  if (!pendingApproval) {
+    if (!githubClient) {
+      return { statusCode: 503, body: { error: "GitHub client is not configured for direct approval execution" } };
+    }
+    const writingReceipt = buildApprovalReceipt(
+      runId,
+      actionId,
+      patchHash,
+      "writing",
+      "Approval accepted; creating draft pull request on GitHub"
+    );
+    await appendApprovalReceipt(dataDir, writingReceipt, postgresStore);
+
+    let pullRequest: { number: number; html_url: string };
+    try {
+      const base = await githubClient.getBranch(liveRecord.run.issue.owner, liveRecord.run.issue.repo, candidatePatch.baseBranch);
+      const baseCommit = await githubClient.getCommit(liveRecord.run.issue.owner, liveRecord.run.issue.repo, base.commit.sha);
+      const tree = await githubClient.createTree(liveRecord.run.issue.owner, liveRecord.run.issue.repo, {
+        baseTree: baseCommit.tree.sha,
+        files: candidatePatch.files.map((file) => ({ path: file.path, content: file.content }))
+      });
+      const commit = await githubClient.createCommit(liveRecord.run.issue.owner, liveRecord.run.issue.repo, {
+        message: `Byter fix: ${candidatePatch.title}`,
+        tree: tree.sha,
+        parents: [base.commit.sha]
+      });
+      await githubClient.createBranch(liveRecord.run.issue.owner, liveRecord.run.issue.repo, candidatePatch.branchName, commit.sha);
+      pullRequest = await githubClient.createPullRequest(liveRecord.run.issue.owner, liveRecord.run.issue.repo, {
+        title: candidatePatch.title,
+        body: candidatePatch.body,
+        head: candidatePatch.branchName,
+        base: candidatePatch.baseBranch,
+        draft: true
+      });
+    } catch (error) {
+      const failedReceipt = buildApprovalReceipt(
+        runId,
+        actionId,
+        patchHash,
+        "write-failed",
+        error instanceof Error ? error.message : "Direct GitHub pull request creation failed"
+      );
+      await appendApprovalReceipt(dataDir, failedReceipt, postgresStore);
+      return { statusCode: 502, body: { error: failedReceipt.message } };
+    }
+
+    let run = liveRecord.run;
+    if (canTransition(run.status, "approved")) {
+      run = transitionRun(run, "approved", "Maintainer approved the verified candidate patch");
+    }
+    if (canTransition(run.status, "pr-created")) {
+      run = transitionRun(run, "pr-created", "Draft GitHub pull request created", {
+        evidence: { pullRequestUrl: pullRequest.html_url, pullRequestNumber: pullRequest.number }
+      });
+    }
+    const updatedRecord: PersistedWebhookRunRecord = {
+      ...liveRecord,
+      run,
+      trueForge: {
+        ...liveRecord.trueForge,
+        status: "completed",
+        result: {
+          ...liveRecord.trueForge.result!,
+          pullRequest: { number: pullRequest.number, url: pullRequest.html_url }
+        },
+        events: mergeHarnessEvents(liveRecord.trueForge.events ?? [], [
+          {
+            id: `approval:${runId}:${actionId}`,
+            at: new Date().toISOString(),
+            type: "approval.received",
+            category: "approval",
+            source: "byter",
+            status: "passed",
+            summary: "Maintainer approved the verified candidate patch",
+            toolName: "create_fix_pull_request",
+            target: `${liveRecord.run.issue.owner}/${liveRecord.run.issue.repo}`,
+            artifact: `draft PR #${pullRequest.number}`
+          }
+        ])
+      }
+    };
+    const receipt = buildApprovalReceipt(
+      runId,
+      actionId,
+      patchHash,
+      "pr-created",
+      `Draft pull request created: #${pullRequest.number}`,
+      { pullRequest: { number: pullRequest.number, url: pullRequest.html_url } }
+    );
+    await appendApprovalReceipt(dataDir, receipt, postgresStore);
+    const commentedRecord = await appendGitHubComment(updatedRecord, githubClient, "approval");
+    await appendUpdatedLiveRecord(dataDir, commentedRecord, postgresStore);
+    return { statusCode: 200, body: receipt };
+  }
+
+  if (pendingApproval.payloadHash !== candidatePatch.hash) {
     return { statusCode: 409, body: { error: "TrueForge is not waiting on this exact candidate patch" } };
   }
   if (!sessionId || !trueForgeRuntime?.resolveToolApproval || !trueForgeRuntime.subscribeToTurn) {
@@ -2369,7 +2465,7 @@ async function monitorTrueForgeTurn(
     const pendingApproval = result?.candidatePatch
       ? extractTrueForgePendingApproval(events, activeTurnId, result.candidatePatch.hash)
       : undefined;
-    const validResult = Boolean(result && (!result.candidatePatch || pendingApproval));
+    const validResult = Boolean(result && (!result.candidatePatch || pendingApproval || hasGenuineProof(result)));
     let run = record.run;
     if (settled && validResult && result) {
       run = applyLiveProofResult(run, result);
@@ -2387,8 +2483,8 @@ async function monitorTrueForgeTurn(
       run,
       trueForge: {
         ...liveRecord.trueForge,
-        status: pendingApproval ? "paused" : completed ? "completed" : "started",
-        ...(pendingApproval
+        status: pendingApproval ? "paused" : (result?.candidatePatch && hasGenuineProof(result)) ? "paused" : completed ? "completed" : "started",
+        ...(pendingApproval || (result?.candidatePatch && hasGenuineProof(result))
           ? { error: undefined }
           : settled
             ? validResult
