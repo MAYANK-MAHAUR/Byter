@@ -60,6 +60,7 @@ interface LiveCandidatePatch {
 
 interface TrueForgePendingApproval {
   turnId: string;
+  approvalTurnId?: string;
   threadId: string;
   toolCallId: string;
   sourceEventId?: string;
@@ -954,16 +955,37 @@ async function executeApproval(
   );
   await appendApprovalReceipt(dataDir, writingReceipt);
 
+  let approvalRecord = liveRecord;
   let approvalTurn: TrueForgeTurn;
   let approvalEvents: TrueForgeRuntimeEvent[];
   try {
-    approvalTurn = await trueForgeRuntime.resolveToolApproval({
-      sessionId,
-      previousTurnId: pendingApproval.turnId,
-      threadId: pendingApproval.threadId,
-      toolCallId: pendingApproval.toolCallId,
-      decision: "allow"
-    });
+    if (pendingApproval.approvalTurnId) {
+      approvalTurn = {
+        id: pendingApproval.approvalTurnId,
+        sessionId,
+        status: "running"
+      };
+    } else {
+      approvalTurn = await trueForgeRuntime.resolveToolApproval({
+        sessionId,
+        previousTurnId: pendingApproval.turnId,
+        threadId: pendingApproval.threadId,
+        toolCallId: pendingApproval.toolCallId,
+        decision: "allow"
+      });
+      approvalRecord = {
+        ...liveRecord,
+        trueForge: {
+          ...liveRecord.trueForge,
+          turn: approvalTurn,
+          pendingApproval: {
+            ...pendingApproval,
+            approvalTurnId: approvalTurn.id
+          }
+        }
+      };
+      await appendUpdatedLiveRecord(dataDir, approvalRecord);
+    }
     approvalEvents = await trueForgeRuntime.subscribeToTurn(sessionId, approvalTurn.id);
   } catch (error) {
     const failedReceipt = buildApprovalReceipt(
@@ -991,7 +1013,7 @@ async function executeApproval(
     await appendApprovalReceipt(dataDir, failedReceipt);
     return { statusCode: 502, body: { error: failedReceipt.message } };
   }
-  let run = liveRecord.run;
+  let run = approvalRecord.run;
   if (canTransition(run.status, "approved")) {
     run = transitionRun(run, "approved", "Maintainer approved the verified candidate patch");
   }
@@ -1001,14 +1023,14 @@ async function executeApproval(
     });
   }
   const updatedRecord: PersistedWebhookRunRecord = {
-    ...liveRecord,
+    ...approvalRecord,
     run,
     trueForge: {
-      ...liveRecord.trueForge,
+      ...approvalRecord.trueForge,
       status: "completed",
       turn: approvalTurn,
       pendingApproval: undefined,
-      events: mergeHarnessEvents(liveRecord.trueForge.events ?? [], [
+      events: mergeHarnessEvents(approvalRecord.trueForge.events ?? [], [
         ...approvalEvents.flatMap((event, index) => projectTrueForgeEvent(event, index)),
         {
           id: `approval:${runId}:${actionId}`,
@@ -1019,13 +1041,13 @@ async function executeApproval(
           status: "passed",
           summary: "Maintainer approval resumed the TrueForge GitHub write",
           toolName: "create_fix_pull_request",
-          target: `${liveRecord.run.issue.owner}/${liveRecord.run.issue.repo}`,
+          target: `${approvalRecord.run.issue.owner}/${approvalRecord.run.issue.repo}`,
           artifact: `draft PR #${pullRequest.number}`
         }
       ]),
       result: {
-        ...liveRecord.trueForge.result!,
-        summary: `${liveRecord.trueForge.result?.summary ?? "Verified candidate patch"} Draft PR created: ${pullRequest.url}`,
+        ...approvalRecord.trueForge.result!,
+        summary: `${approvalRecord.trueForge.result?.summary ?? "Verified candidate patch"} Draft PR created: ${pullRequest.url}`,
         pullRequest
       }
     }
@@ -2007,6 +2029,7 @@ async function monitorTrueForgeTurn(
   try {
     let events: TrueForgeRuntimeEvent[];
     let liveRecord = record;
+    let activeTurnId = record.trueForge.turn.id;
     let liveEventIndex = 0;
     const persistTraceEvent: TrueForgeRuntimeEventListener = async (event) => {
       const projected = projectTrueForgeEvent(event, liveEventIndex);
@@ -2078,6 +2101,7 @@ async function monitorTrueForgeTurn(
     if (completed && !result && trueForgeRuntime.requestProofContract) {
       try {
         const recoveryTurn = await trueForgeRuntime.requestProofContract(record.trueForge.session.id);
+        activeTurnId = recoveryTurn.id;
         liveRecord = {
           ...liveRecord,
           trueForge: {
@@ -2109,7 +2133,7 @@ async function monitorTrueForgeTurn(
       events.flatMap((event, index) => projectTrueForgeEvent(event, index))
     );
     const pendingApproval = result?.candidatePatch
-      ? extractTrueForgePendingApproval(events, record.trueForge.turn.id, result.candidatePatch.hash)
+      ? extractTrueForgePendingApproval(events, activeTurnId, result.candidatePatch.hash)
       : undefined;
     const validResult = Boolean(result && (!result.candidatePatch || pendingApproval));
     let run = record.run;
@@ -2858,7 +2882,7 @@ function githubMcpHandlerFromEnv(githubClient: GitHubRestClientLike | undefined)
   return createGitHubMcpHttpHandler({
     client: githubClient,
     authToken: mcpAuthToken,
-    readOnly: true
+    readOnly: false
   });
 }
 
