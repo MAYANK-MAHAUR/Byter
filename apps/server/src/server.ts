@@ -2873,7 +2873,11 @@ function resultOutputTexts(value: unknown): string[] {
     event.text,
     event.message,
     event.toolCalls,
-    event.tool_calls
+    event.tool_calls,
+    event.input,
+    event.args,
+    event.arguments,
+    event.payload
   ];
 
   return candidates.map((candidate) => clampText(contentText(candidate), maxResultTextBytes)).filter((text) => text.length > 0);
