@@ -22,10 +22,12 @@
     "@byter/agent": "workspace:*",
     "@byter/core": "workspace:*",
     "@byter/github": "workspace:*",
-    "@byter/github-mcp": "workspace:*"
+    "@byter/github-mcp": "workspace:*",
+    "pg": "^8.13.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/pg": "^8.11.11",
     "typescript": "^5.5.4",
     "vitest": "^2.1.1"
   }

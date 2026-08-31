@@ -26,6 +26,8 @@ import {
   verifyGitHubWebhook
 } from "@byter/github";
 
+import { PostgresStore } from "./db.js";
+
 type ApprovalActionId = "approve-pr" | "request-diff" | "reject-run";
 type GitHubCommentKind = "started" | "completed" | "failed" | "approval";
 const maxRequestBodyBytes = 64 * 1024;
@@ -41,6 +43,7 @@ const duplicateIssueTriggerWindowMs = 60_000;
 export interface ByterServerOptions {
   staticDir?: string;
   dataDir?: string;
+  postgresStore?: PostgresStore;
   trueForgeRuntime?: ByterSessionStarter;
   mcpHandler?: McpRequestHandler;
   githubClient?: GitHubRestClientLike;
@@ -148,6 +151,14 @@ interface PersistedWebhookRunRecord {
 export function createByterServer(options: ByterServerOptions = {}): Server {
   const staticDir = resolve(options.staticDir ?? process.env.STATIC_DIR ?? defaultStaticDir());
   const dataDir = options.dataDir ?? process.env.DATA_DIR;
+  const databaseUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.PGDATABASE_URL;
+  let postgresStore = options.postgresStore;
+  if (!postgresStore && databaseUrl) {
+    postgresStore = new PostgresStore(databaseUrl);
+    postgresStore.init().catch((err) => {
+      console.error("Failed to initialize PostgreSQL store:", err);
+    });
+  }
   const trueForgeRuntime = options.trueForgeRuntime ?? trueForgeRuntimeFromEnv();
   const githubClient = options.githubClient ?? githubClientFromEnv();
   const mcpHandler = options.mcpHandler ?? githubMcpHandlerFromEnv(githubClient);
@@ -163,12 +174,12 @@ export function createByterServer(options: ByterServerOptions = {}): Server {
       }
 
       if (url.pathname === "/api/runs/latest") {
-        await handleLatestRun(request, response, dataDir ? resolve(dataDir) : undefined, trueForgeRuntime);
+        await handleLatestRun(request, response, dataDir ? resolve(dataDir) : undefined, trueForgeRuntime, postgresStore);
         return;
       }
 
       if (url.pathname.startsWith("/api/runs/") && url.pathname !== "/api/runs/latest") {
-        await handleRun(request, response, dataDir ? resolve(dataDir) : undefined, decodeRunId(url.pathname), trueForgeRuntime);
+        await handleRun(request, response, dataDir ? resolve(dataDir) : undefined, decodeRunId(url.pathname), trueForgeRuntime, postgresStore);
         return;
       }
 
@@ -182,7 +193,7 @@ export function createByterServer(options: ByterServerOptions = {}): Server {
       }
 
       if (url.pathname === "/api/approvals") {
-        await handleApproval(request, response, dataDir ? resolve(dataDir) : undefined, trueForgeRuntime, githubClient);
+        await handleApproval(request, response, dataDir ? resolve(dataDir) : undefined, trueForgeRuntime, githubClient, postgresStore);
         return;
       }
 
@@ -193,7 +204,8 @@ export function createByterServer(options: ByterServerOptions = {}): Server {
           dataDir ? resolve(dataDir) : undefined,
           trueForgeRuntime,
           githubClient,
-          activeIssueTriggers
+          activeIssueTriggers,
+          postgresStore
         );
         return;
       }
@@ -217,7 +229,8 @@ async function handleGitHubWebhook(
   dataDir: string | undefined,
   trueForgeRuntime: ByterSessionStarter | undefined,
   githubClient: GitHubRestClientLike | undefined,
-  activeIssueTriggers: Set<string>
+  activeIssueTriggers: Set<string>,
+  postgresStore?: PostgresStore
 ): Promise<void> {
   if (request.method !== "POST") {
     sendJson(response, 405, { error: "Method not allowed" });
@@ -230,8 +243,8 @@ async function handleGitHubWebhook(
     return;
   }
 
-  if (!dataDir) {
-    sendJson(response, 503, { error: "DATA_DIR is required for webhook deduplication" });
+  if (!dataDir && !postgresStore) {
+    sendJson(response, 503, { error: "Storage is required for webhook deduplication" });
     return;
   }
 
@@ -248,7 +261,7 @@ async function handleGitHubWebhook(
     return;
   }
 
-  if (dataDir && (await deliveryWasProcessed(dataDir, deliveryId))) {
+  if (await deliveryWasProcessed(dataDir, deliveryId, postgresStore)) {
     sendJson(response, 202, { ignored: true, reason: "Duplicate GitHub delivery" });
     return;
   }
@@ -260,7 +273,7 @@ async function handleGitHubWebhook(
   }
 
   if (eventName === "issue_comment") {
-    await handleGitHubIssueCommentWebhook(payload, response, dataDir, githubClient, trueForgeRuntime, activeIssueTriggers);
+    await handleGitHubIssueCommentWebhook(payload, response, dataDir, githubClient, trueForgeRuntime, activeIssueTriggers, postgresStore);
     return;
   }
 
@@ -288,7 +301,7 @@ async function handleGitHubWebhook(
     return;
   }
 
-  await processIssueWebhook(webhook, deliveryId, response, dataDir, githubClient, trueForgeRuntime, activeIssueTriggers, isExplicitRetrigger);
+  await processIssueWebhook(webhook, deliveryId, response, dataDir, githubClient, trueForgeRuntime, activeIssueTriggers, isExplicitRetrigger, postgresStore);
 }
 
 async function processIssueWebhook(
@@ -299,7 +312,8 @@ async function processIssueWebhook(
   githubClient: GitHubRestClientLike | undefined,
   trueForgeRuntime: ByterSessionStarter | undefined,
   activeIssueTriggers: Set<string>,
-  isExplicitRetrigger = false
+  isExplicitRetrigger = false,
+  postgresStore?: PostgresStore
 ): Promise<void> {
   const issueTriggerKey = triggerKeyFor(webhook);
   if (!isExplicitRetrigger) {
@@ -312,7 +326,7 @@ async function processIssueWebhook(
 
   const claim = isExplicitRetrigger
     ? { acquired: true, release: async () => {} }
-    : (dataDir ? await acquireAtomicTriggerClaim(dataDir, issueTriggerKey) : { acquired: true, release: async () => {} });
+    : await acquireAtomicTriggerClaim(dataDir, issueTriggerKey, postgresStore);
   if (!claim.acquired) {
     if (!isExplicitRetrigger) {
       activeIssueTriggers.delete(issueTriggerKey);
@@ -322,7 +336,7 @@ async function processIssueWebhook(
   }
 
   try {
-    if (dataDir && (await issueTriggerWasRecentlyProcessed(dataDir, webhook))) {
+    if (await issueTriggerWasRecentlyProcessed(dataDir, webhook, postgresStore)) {
       sendJson(response, 202, { ignored: true, reason: "Duplicate issue trigger" });
       return;
     }
@@ -362,16 +376,24 @@ async function processIssueWebhook(
       scan,
       trueForge: orchestration.trueForge
     };
-    if (dataDir) {
-      await mkdir(dataDir, { recursive: true });
-    }
     const labeledRecord = await syncLifecycleLabels(record, githubClient);
     const commentRecord = await appendGitHubComment(labeledRecord, githubClient, "started");
-    if (dataDir) {
-      await appendFile(join(dataDir, "webhook-runs.jsonl"), `${JSON.stringify(commentRecord)}\n`, "utf8");
+
+    if (postgresStore) {
+      await postgresStore.saveWebhookRun(commentRecord).catch((err) => {
+        console.error("Postgres saveWebhookRun error:", err);
+      });
     }
-    if (orchestration.trueForge.status === "started" && trueForgeRuntime?.subscribeToTurn && dataDir) {
-      void monitorTrueForgeTurn(dataDir, commentRecord, trueForgeRuntime, githubClient);
+    if (dataDir) {
+      try {
+        await mkdir(dataDir, { recursive: true });
+        await appendFile(join(dataDir, "webhook-runs.jsonl"), `${JSON.stringify(commentRecord)}\n`, "utf8");
+      } catch (err) {
+        console.warn("Could not append to local webhook-runs.jsonl (ignoring if postgres is active):", err);
+      }
+    }
+    if (orchestration.trueForge.status === "started" && trueForgeRuntime?.subscribeToTurn && (dataDir || postgresStore)) {
+      void monitorTrueForgeTurn(dataDir, commentRecord, trueForgeRuntime, githubClient, postgresStore);
     }
 
     sendJson(response, 202, commentRecord);
@@ -409,7 +431,8 @@ async function handleGitHubIssueCommentWebhook(
   dataDir: string | undefined,
   githubClient: GitHubRestClientLike | undefined,
   trueForgeRuntime: ByterSessionStarter | undefined,
-  activeIssueTriggers: Set<string>
+  activeIssueTriggers: Set<string>,
+  postgresStore?: PostgresStore
 ): Promise<void> {
   let webhook: ReturnType<typeof parseIssueCommentWebhook>;
   try {
@@ -433,7 +456,7 @@ async function handleGitHubIssueCommentWebhook(
       repository: webhook.repository
     };
     const commentDeliveryId = `comment-${createHash("sha256").update(`${webhook.repository.full_name}#${webhook.issue.number}:${Date.now()}`).digest("hex").slice(0, 12)}`;
-    await processIssueWebhook(issueWebhook, commentDeliveryId, response, dataDir, githubClient, trueForgeRuntime, activeIssueTriggers, true);
+    await processIssueWebhook(issueWebhook, commentDeliveryId, response, dataDir, githubClient, trueForgeRuntime, activeIssueTriggers, true, postgresStore);
     return;
   }
 
@@ -472,15 +495,15 @@ async function handleGitHubIssueCommentWebhook(
     return;
   }
 
-  if (!dataDir) {
-    sendJson(response, 503, { error: "DATA_DIR is required for approval resolution" });
+  if (!dataDir && !postgresStore) {
+    sendJson(response, 503, { error: "Storage is required for approval resolution" });
     return;
   }
 
   const repository = `${webhook.repository.owner.login}/${webhook.repository.name}`;
   const liveRecord = command.runId
-    ? await findPersistedRunById(dataDir, command.runId)
-    : await findLatestAwaitingRunByIssue(dataDir, repository, webhook.issue.number);
+    ? await findPersistedRunById(dataDir, command.runId, postgresStore)
+    : await findLatestAwaitingRunByIssue(dataDir, repository, webhook.issue.number, postgresStore);
   if (
     !liveRecord ||
     liveRecord.repository !== repository ||
@@ -496,7 +519,7 @@ async function handleGitHubIssueCommentWebhook(
     sendJson(response, 409, { error: "No approved candidate patch is available for this issue" });
     return;
   }
-  const result = await executeApproval(dataDir, liveRecord.run.id, "approve-pr", patchHash, trueForgeRuntime, githubClient);
+  const result = await executeApproval(dataDir, liveRecord.run.id, "approve-pr", patchHash, trueForgeRuntime, githubClient, postgresStore);
   sendJson(response, result.statusCode, result.body);
 }
 
@@ -504,19 +527,26 @@ async function handleLatestRun(
   request: IncomingMessage,
   response: ServerResponse,
   dataDir: string | undefined,
-  trueForgeRuntime: ByterSessionStarter | undefined
+  trueForgeRuntime: ByterSessionStarter | undefined,
+  postgresStore?: PostgresStore
 ): Promise<void> {
   if (request.method !== "GET") {
     sendJson(response, 405, { error: "Method not allowed" });
     return;
   }
 
-  if (!dataDir) {
-    sendJson(response, 404, { error: "No persisted webhook runs are configured" });
-    return;
+  let latest: any;
+  if (postgresStore) {
+    try {
+      latest = await postgresStore.readLatestRun();
+    } catch (err) {
+      console.error("Postgres readLatestRun error:", err);
+    }
+  }
+  if (!latest && dataDir) {
+    latest = await readLatestJsonlRecord(dataDir, "webhook-runs.jsonl");
   }
 
-  const latest = await readLatestJsonlRecord(dataDir, "webhook-runs.jsonl");
   if (!latest) {
     sendJson(response, 404, { error: "No persisted webhook runs found" });
     return;
@@ -531,14 +561,15 @@ async function handleRun(
   response: ServerResponse,
   dataDir: string | undefined,
   runId: string,
-  trueForgeRuntime: ByterSessionStarter | undefined
+  trueForgeRuntime: ByterSessionStarter | undefined,
+  postgresStore?: PostgresStore
 ): Promise<void> {
   if (request.method !== "GET") {
     sendJson(response, 405, { error: "Method not allowed" });
     return;
   }
 
-  const record = await findPersistedRunById(dataDir, runId);
+  const record = await findPersistedRunById(dataDir, runId, postgresStore);
   if (!record) {
     sendJson(response, 404, { error: "Persisted run not found" });
     return;
@@ -840,7 +871,8 @@ async function handleApproval(
   response: ServerResponse,
   dataDir: string | undefined,
   trueForgeRuntime: ByterSessionStarter | undefined,
-  githubClient: GitHubRestClientLike | undefined
+  githubClient: GitHubRestClientLike | undefined,
+  postgresStore?: PostgresStore
 ): Promise<void> {
   if (request.method !== "POST") {
     sendJson(response, 405, { error: "Method not allowed" });
@@ -858,8 +890,8 @@ async function handleApproval(
     return;
   }
 
-  if (!dataDir) {
-    sendJson(response, 503, { error: "DATA_DIR is required for approval persistence" });
+  if (!dataDir && !postgresStore) {
+    sendJson(response, 503, { error: "Storage is required for approval persistence" });
     return;
   }
 
@@ -867,7 +899,7 @@ async function handleApproval(
   const actionId = expectApprovalAction(payload.actionId);
   const runId = expectString(payload.runId, "runId");
   const patchHash = expectString(payload.patchHash, "patchHash");
-  const result = await executeApproval(dataDir, runId, actionId, patchHash, trueForgeRuntime, githubClient);
+  const result = await executeApproval(dataDir, runId, actionId, patchHash, trueForgeRuntime, githubClient, postgresStore);
   sendJson(response, result.statusCode, result.body);
 }
 
@@ -877,14 +909,15 @@ interface ApprovalExecutionResult {
 }
 
 async function executeApproval(
-  dataDir: string,
+  dataDir: string | undefined,
   runId: string,
   actionId: ApprovalActionId,
   patchHash: string,
   trueForgeRuntime: ByterSessionStarter | undefined,
-  githubClient: GitHubRestClientLike | undefined
+  githubClient: GitHubRestClientLike | undefined,
+  postgresStore?: PostgresStore
 ): Promise<ApprovalExecutionResult> {
-  const liveRecord = await findPersistedRunById(dataDir, runId);
+  const liveRecord = await findPersistedRunById(dataDir, runId, postgresStore);
   if (!liveRecord) {
     return { statusCode: 404, body: { error: "Persisted run not found" } };
   }
@@ -946,7 +979,7 @@ async function executeApproval(
       }
     }
     const receipt = buildApprovalReceipt(runId, actionId, patchHash, resultStatusFor(actionId), messageFor(actionId));
-    await appendApprovalReceipt(dataDir, receipt);
+    await appendApprovalReceipt(dataDir, receipt, postgresStore);
     const baseRecord: PersistedWebhookRunRecord = {
       ...liveRecord,
       run,
@@ -969,7 +1002,7 @@ async function executeApproval(
       : baseRecord;
     const statusLabeledRecord = await syncLifecycleLabels(cleanedRecord, githubClient);
     const updatedRecord = await appendGitHubComment(statusLabeledRecord, githubClient, "approval");
-    await appendUpdatedLiveRecord(dataDir, updatedRecord);
+    await appendUpdatedLiveRecord(dataDir, updatedRecord, postgresStore);
     return { statusCode: 200, body: receipt };
   }
 
@@ -989,7 +1022,7 @@ async function executeApproval(
     "writing",
     "Approval accepted; resuming the paused TrueForge GitHub write"
   );
-  await appendApprovalReceipt(dataDir, writingReceipt);
+  await appendApprovalReceipt(dataDir, writingReceipt, postgresStore);
 
   let approvalRecord = liveRecord;
   let approvalTurn: TrueForgeTurn;
@@ -1020,7 +1053,7 @@ async function executeApproval(
           }
         }
       };
-      await appendUpdatedLiveRecord(dataDir, approvalRecord);
+      await appendUpdatedLiveRecord(dataDir, approvalRecord, postgresStore);
     }
     approvalEvents = await reconcileSessionEvents({
       trueForgeRuntime,
@@ -1045,7 +1078,7 @@ async function executeApproval(
       "write-failed",
       error instanceof Error ? error.message : "TrueForge approval resume failed"
     );
-    await appendApprovalReceipt(dataDir, failedReceipt);
+    await appendApprovalReceipt(dataDir, failedReceipt, postgresStore);
     return { statusCode: 502, body: { error: failedReceipt.message } };
   }
 
@@ -1060,7 +1093,7 @@ async function executeApproval(
       "write-failed",
       error instanceof Error ? error.message : "TrueForge did not return a pull request receipt"
     );
-    await appendApprovalReceipt(dataDir, failedReceipt);
+    await appendApprovalReceipt(dataDir, failedReceipt, postgresStore);
     return { statusCode: 502, body: { error: failedReceipt.message } };
   }
   let run = approvalRecord.run;
@@ -1105,7 +1138,7 @@ async function executeApproval(
   const cleanedRecord = await removeAwaitingApprovalLabel(updatedRecord, githubClient);
   const statusLabeledRecord = await syncLifecycleLabels(cleanedRecord, githubClient);
   const commentedRecord = await appendGitHubComment(statusLabeledRecord, githubClient, "approval");
-  await appendUpdatedLiveRecord(dataDir, commentedRecord);
+  await appendUpdatedLiveRecord(dataDir, commentedRecord, postgresStore);
   const receipt = buildApprovalReceipt(
     runId,
     actionId,
@@ -1114,7 +1147,7 @@ async function executeApproval(
     "Draft GitHub pull request created",
     { pullRequest }
   );
-  await appendApprovalReceipt(dataDir, receipt);
+  await appendApprovalReceipt(dataDir, receipt, postgresStore);
   return { statusCode: 200, body: receipt };
 }
 
@@ -1154,14 +1187,36 @@ function buildApprovalReceipt(
   };
 }
 
-async function appendApprovalReceipt(dataDir: string, receipt: ApprovalReceipt): Promise<void> {
-  await mkdir(dataDir, { recursive: true });
-  await appendFile(join(dataDir, "approvals.jsonl"), `${JSON.stringify(receipt)}\n`, "utf8");
+async function appendApprovalReceipt(dataDir: string | undefined, receipt: ApprovalReceipt, postgresStore?: PostgresStore): Promise<void> {
+  if (postgresStore) {
+    await postgresStore.saveApprovalReceipt(receipt as any).catch((err) => {
+      console.error("Postgres saveApprovalReceipt error:", err);
+    });
+  }
+  if (dataDir) {
+    try {
+      await mkdir(dataDir, { recursive: true });
+      await appendFile(join(dataDir, "approvals.jsonl"), `${JSON.stringify(receipt)}\n`, "utf8");
+    } catch (err) {
+      console.warn("Could not append to local approvals.jsonl:", err);
+    }
+  }
 }
 
-async function appendUpdatedLiveRecord(dataDir: string, record: PersistedWebhookRunRecord): Promise<void> {
-  await mkdir(dataDir, { recursive: true });
-  await appendFile(join(dataDir, "webhook-runs.jsonl"), `${JSON.stringify(record)}\n`, "utf8");
+async function appendUpdatedLiveRecord(dataDir: string | undefined, record: PersistedWebhookRunRecord, postgresStore?: PostgresStore): Promise<void> {
+  if (postgresStore) {
+    await postgresStore.saveWebhookRun(record).catch((err) => {
+      console.error("Postgres saveWebhookRun error:", err);
+    });
+  }
+  if (dataDir) {
+    try {
+      await mkdir(dataDir, { recursive: true });
+      await appendFile(join(dataDir, "webhook-runs.jsonl"), `${JSON.stringify(record)}\n`, "utf8");
+    } catch (err) {
+      console.warn("Could not append to local webhook-runs.jsonl:", err);
+    }
+  }
 }
 
 const lifecycleLabelDefinitions = [
@@ -1618,7 +1673,19 @@ function githubCommentStatus(record: PersistedWebhookRunRecord): { label: string
   return { label: "Investigation queued", detail: "Byter accepted the signed issue and is preparing the investigation." };
 }
 
-async function findPersistedRunById(dataDir: string | undefined, runId: string): Promise<PersistedWebhookRunRecord | undefined> {
+async function findPersistedRunById(
+  dataDir: string | undefined,
+  runId: string,
+  postgresStore?: PostgresStore
+): Promise<PersistedWebhookRunRecord | undefined> {
+  if (postgresStore) {
+    try {
+      const run = await postgresStore.findRunById(runId);
+      if (run) return run;
+    } catch (err) {
+      console.error("Postgres findRunById error:", err);
+    }
+  }
   if (!dataDir) return undefined;
   try {
     let match: PersistedWebhookRunRecord | undefined;
@@ -1637,10 +1704,20 @@ async function findPersistedRunById(dataDir: string | undefined, runId: string):
 }
 
 async function findLatestAwaitingRunByIssue(
-  dataDir: string,
+  dataDir: string | undefined,
   repository: string,
-  issueNumber: number
+  issueNumber: number,
+  postgresStore?: PostgresStore
 ): Promise<PersistedWebhookRunRecord | undefined> {
+  if (postgresStore) {
+    try {
+      const run = await postgresStore.findLatestAwaitingRunByIssue(repository, issueNumber);
+      if (run) return run;
+    } catch (err) {
+      console.error("Postgres findLatestAwaitingRunByIssue error:", err);
+    }
+  }
+  if (!dataDir) return undefined;
   try {
     let match: PersistedWebhookRunRecord | undefined;
     for await (const line of readJsonlLines(join(dataDir, "webhook-runs.jsonl"))) {
@@ -1649,7 +1726,7 @@ async function findLatestAwaitingRunByIssue(
         if (
           record.repository === repository &&
           record.run?.issue.issueNumber === issueNumber &&
-          record.run.status === "awaiting-approval" &&
+          (record.run.status === "awaiting-approval" || Boolean(record.trueForge?.pendingApproval)) &&
           (!match || Date.parse(record.run.createdAt) > Date.parse(match.run.createdAt))
         ) {
           match = record;
@@ -1665,11 +1742,12 @@ async function findLatestAwaitingRunByIssue(
 }
 
 async function findApprovalReceipt(
-  dataDir: string,
+  dataDir: string | undefined,
   runId: string,
   actionId: ApprovalActionId,
   patchHash: string
 ): Promise<ApprovalReceipt | undefined> {
+  if (!dataDir) return undefined;
   try {
     let match: ApprovalReceipt | undefined;
     for await (const line of readJsonlLines(join(dataDir, "approvals.jsonl"))) {
@@ -1809,7 +1887,19 @@ function expectApprovalAction(value: unknown): ApprovalActionId {
   throw new HttpError(400, "Expected valid approval action");
 }
 
-async function deliveryWasProcessed(dataDir: string, deliveryId: string): Promise<boolean> {
+async function deliveryWasProcessed(
+  dataDir: string | undefined,
+  deliveryId: string,
+  postgresStore?: PostgresStore
+): Promise<boolean> {
+  if (postgresStore) {
+    try {
+      return await postgresStore.deliveryWasProcessed(deliveryId);
+    } catch (err) {
+      console.error("Postgres deliveryWasProcessed error:", err);
+    }
+  }
+  if (!dataDir) return false;
   try {
     const needle = `"deliveryId":${JSON.stringify(deliveryId)}`;
     for await (const line of readJsonlLines(join(dataDir, "webhook-runs.jsonl"))) {
@@ -1832,63 +1922,93 @@ function triggerKeyFor(webhook: ReturnType<typeof parseIssueWebhook>): string {
 }
 
 async function acquireAtomicTriggerClaim(
-  dataDir: string,
-  key: string
+  dataDir: string | undefined,
+  key: string,
+  postgresStore?: PostgresStore
 ): Promise<{ acquired: boolean; release: () => Promise<void> }> {
-  const claimsDir = join(dataDir, ".claims");
-  await mkdir(claimsDir, { recursive: true });
-  const safeName = createHash("sha256").update(key).digest("hex").slice(0, 24);
-  const claimPath = join(claimsDir, `claim-${safeName}.lock`);
-  const now = Date.now();
-  const token = randomUUID();
-
-  const makeConditionalRelease = (ownerToken: string) => async () => {
+  if (postgresStore) {
     try {
-      const current = JSON.parse(await readFile(claimPath, "utf8"));
-      if (current?.token === ownerToken) {
-        await unlink(claimPath);
-      }
-    } catch {
-      // ignore
+      return await postgresStore.acquireTriggerClaim(key, duplicateIssueTriggerWindowMs);
+    } catch (err) {
+      console.error("Postgres acquireTriggerClaim error:", err);
     }
-  };
-
+  }
+  if (!dataDir) {
+    return { acquired: true, release: async () => {} };
+  }
   try {
-    await writeFile(claimPath, JSON.stringify({ key, time: now, token }), { flag: "wx" });
-    return {
-      acquired: true,
-      release: makeConditionalRelease(token)
-    };
-  } catch (err: any) {
-    if (err?.code === "EEXIST") {
+    const claimsDir = join(dataDir, ".claims");
+    await mkdir(claimsDir, { recursive: true });
+    const safeName = createHash("sha256").update(key).digest("hex").slice(0, 24);
+    const claimPath = join(claimsDir, `claim-${safeName}.lock`);
+    const now = Date.now();
+    const token = randomUUID();
+
+    const makeConditionalRelease = (ownerToken: string) => async () => {
       try {
-        const content = JSON.parse(await readFile(claimPath, "utf8"));
-        if (typeof content?.time === "number" && now - content.time < duplicateIssueTriggerWindowMs) {
+        const current = JSON.parse(await readFile(claimPath, "utf8"));
+        if (current?.token === ownerToken) {
+          await unlink(claimPath);
+        }
+      } catch {
+        // ignore
+      }
+    };
+
+    try {
+      await writeFile(claimPath, JSON.stringify({ key, time: now, token }), { flag: "wx" });
+      return {
+        acquired: true,
+        release: makeConditionalRelease(token)
+      };
+    } catch (err: any) {
+      if (err?.code === "EEXIST") {
+        try {
+          const content = JSON.parse(await readFile(claimPath, "utf8"));
+          if (typeof content?.time === "number" && now - content.time < duplicateIssueTriggerWindowMs) {
+            return { acquired: false, release: async () => {} };
+          }
+          // Stale claim expired: overwrite with new ownership token
+          await writeFile(claimPath, JSON.stringify({ key, time: now, token }));
+          return {
+            acquired: true,
+            release: makeConditionalRelease(token)
+          };
+        } catch {
           return { acquired: false, release: async () => {} };
         }
-        // Stale claim expired: overwrite with new ownership token
-        await writeFile(claimPath, JSON.stringify({ key, time: now, token }));
-        return {
-          acquired: true,
-          release: makeConditionalRelease(token)
-        };
-      } catch {
-        return { acquired: false, release: async () => {} };
       }
+      return { acquired: false, release: async () => {} };
     }
-    return { acquired: false, release: async () => {} };
+  } catch {
+    return { acquired: true, release: async () => {} };
   }
 }
 
 async function issueTriggerWasRecentlyProcessed(
-  dataDir: string,
-  webhook: ReturnType<typeof parseIssueWebhook>
+  dataDir: string | undefined,
+  webhook: ReturnType<typeof parseIssueWebhook>,
+  postgresStore?: PostgresStore
 ): Promise<boolean> {
   if (webhook.action === "reopened") {
     return false;
   }
 
   const cutoff = Date.now() - duplicateIssueTriggerWindowMs;
+  if (postgresStore) {
+    try {
+      return await postgresStore.issueTriggerWasRecentlyProcessed(
+        webhook.repository.full_name,
+        webhook.issue.number,
+        webhook.issue.title,
+        webhook.issue.body ?? "",
+        cutoff
+      );
+    } catch (err) {
+      console.error("Postgres issueTriggerWasRecentlyProcessed error:", err);
+    }
+  }
+  if (!dataDir) return false;
   try {
     for await (const line of readJsonlLines(join(dataDir, "webhook-runs.jsonl"))) {
       let record: PersistedWebhookRunRecord;
@@ -2143,10 +2263,11 @@ async function reconcileSessionEvents(options: ReconcileSessionEventsOptions): P
 }
 
 async function monitorTrueForgeTurn(
-  dataDir: string,
+  dataDir: string | undefined,
   record: PersistedWebhookRunRecord,
   trueForgeRuntime: ByterSessionStarter,
-  githubClient: GitHubRestClientLike | undefined
+  githubClient: GitHubRestClientLike | undefined,
+  postgresStore?: PostgresStore
 ): Promise<void> {
   if (!record.trueForge.session?.id || !record.trueForge.turn?.id || !trueForgeRuntime.subscribeToTurn) {
     return;
@@ -2170,7 +2291,7 @@ async function monitorTrueForgeTurn(
           events: nextEvents
         }
       };
-      await appendUpdatedLiveRecord(dataDir, liveRecord);
+      await appendUpdatedLiveRecord(dataDir, liveRecord, postgresStore);
     };
 
     let events = await reconcileSessionEvents({
@@ -2217,7 +2338,7 @@ async function monitorTrueForgeTurn(
             error: "TrueForge proof contract recovery requested"
           }
         };
-        await appendUpdatedLiveRecord(dataDir, liveRecord);
+        await appendUpdatedLiveRecord(dataDir, liveRecord, postgresStore);
 
         const recoveryEvents = await reconcileSessionEvents({
           trueForgeRuntime,
@@ -2283,7 +2404,7 @@ async function monitorTrueForgeTurn(
       ? await applyAwaitingApprovalLabel(verifiedRecord, githubClient)
       : verifiedRecord;
     const commentedRecord = await appendGitHubComment(approvalLabeledRecord, githubClient, validResult ? "completed" : "failed");
-    await appendUpdatedLiveRecord(dataDir, commentedRecord);
+    await appendUpdatedLiveRecord(dataDir, commentedRecord, postgresStore);
   } catch (error) {
     console.error("TrueForge turn subscription failed", error);
     let failedRun = record.run;
@@ -2300,7 +2421,7 @@ async function monitorTrueForgeTurn(
       }
     } satisfies PersistedWebhookRunRecord;
     const commentedRecord = await appendGitHubComment(failedRecord, githubClient, "failed");
-    await appendUpdatedLiveRecord(dataDir, commentedRecord);
+    await appendUpdatedLiveRecord(dataDir, commentedRecord, postgresStore);
   }
 }
 
