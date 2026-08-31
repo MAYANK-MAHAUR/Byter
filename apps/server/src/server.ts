@@ -923,8 +923,8 @@ async function executeApproval(
   }
 
   const candidatePatch = liveRecord.trueForge.result?.candidatePatch;
-  if (!candidatePatch || candidatePatch.hash !== patchHash) {
-    return { statusCode: 409, body: { error: "Approval payload does not match the live candidate patch" } };
+  if (!candidatePatch || candidatePatch.hash !== patchHash || !Array.isArray(candidatePatch.files) || candidatePatch.files.length === 0) {
+    return { statusCode: 409, body: { error: "Approval payload has no valid patch files" } };
   }
   const previousReceipt = await findApprovalReceipt(dataDir, runId, actionId, patchHash);
   if (previousReceipt?.resultStatus === "writing") {
@@ -1484,12 +1484,23 @@ async function removeAwaitingApprovalLabel(
 
 function hasGenuineProof(result: LiveProofResult | undefined): boolean {
   const proof = result?.proof;
+  const hasValidPatchFiles = Boolean(
+    result?.candidatePatch &&
+    Array.isArray(result.candidatePatch.files) &&
+    result.candidatePatch.files.length > 0 &&
+    result.candidatePatch.files.every((file) => typeof file.path === "string" && file.path.trim().length > 0 && typeof file.content === "string" && file.content.trim().length > 0)
+  );
   return Boolean(
     (result?.status === "verified" || result?.status === "patch-ready") &&
-      proof?.before &&
-      proof.after &&
-      proof.regressions &&
-      proof.attempts
+      typeof proof?.before === "string" &&
+      proof.before.trim().length > 0 &&
+      typeof proof?.after === "string" &&
+      proof.after.trim().length > 0 &&
+      typeof proof?.regressions === "string" &&
+      proof.regressions.trim().length > 0 &&
+      typeof proof?.attempts === "string" &&
+      proof.attempts.trim().length > 0 &&
+      (!result?.candidatePatch || hasValidPatchFiles)
   );
 }
 
