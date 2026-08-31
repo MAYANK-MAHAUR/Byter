@@ -260,7 +260,7 @@ async function handleGitHubWebhook(
   }
 
   if (eventName === "issue_comment") {
-    await handleGitHubIssueCommentWebhook(payload, response, dataDir, githubClient, trueForgeRuntime);
+    await handleGitHubIssueCommentWebhook(payload, response, dataDir, githubClient, trueForgeRuntime, activeIssueTriggers);
     return;
   }
 
@@ -289,6 +289,19 @@ async function handleGitHubWebhook(
   }
 
   const isExplicitRetrigger = webhook.action === "reopened";
+  await processIssueWebhook(webhook, deliveryId, response, dataDir, githubClient, trueForgeRuntime, activeIssueTriggers, isExplicitRetrigger);
+}
+
+async function processIssueWebhook(
+  webhook: ReturnType<typeof parseIssueWebhook>,
+  deliveryId: string,
+  response: ServerResponse,
+  dataDir: string | undefined,
+  githubClient: GitHubRestClientLike | undefined,
+  trueForgeRuntime: ByterSessionStarter | undefined,
+  activeIssueTriggers: Set<string>,
+  isExplicitRetrigger = false
+): Promise<void> {
   const issueTriggerKey = triggerKeyFor(webhook);
   if (!isExplicitRetrigger) {
     if (activeIssueTriggers.has(issueTriggerKey)) {
@@ -300,7 +313,7 @@ async function handleGitHubWebhook(
 
   const claim = isExplicitRetrigger
     ? { acquired: true, release: async () => {} }
-    : await acquireAtomicTriggerClaim(dataDir, issueTriggerKey);
+    : (dataDir ? await acquireAtomicTriggerClaim(dataDir, issueTriggerKey) : { acquired: true, release: async () => {} });
   if (!claim.acquired) {
     if (!isExplicitRetrigger) {
       activeIssueTriggers.delete(issueTriggerKey);
@@ -310,7 +323,7 @@ async function handleGitHubWebhook(
   }
 
   try {
-    if (await issueTriggerWasRecentlyProcessed(dataDir, webhook)) {
+    if (dataDir && (await issueTriggerWasRecentlyProcessed(dataDir, webhook))) {
       sendJson(response, 202, { ignored: true, reason: "Duplicate issue trigger" });
       return;
     }
@@ -350,11 +363,15 @@ async function handleGitHubWebhook(
       scan,
       trueForge: orchestration.trueForge
     };
-    await mkdir(dataDir, { recursive: true });
+    if (dataDir) {
+      await mkdir(dataDir, { recursive: true });
+    }
     const labeledRecord = await syncLifecycleLabels(record, githubClient);
     const commentRecord = await appendGitHubComment(labeledRecord, githubClient, "started");
-    await appendFile(join(dataDir, "webhook-runs.jsonl"), `${JSON.stringify(commentRecord)}\n`, "utf8");
-    if (orchestration.trueForge.status === "started" && trueForgeRuntime?.subscribeToTurn) {
+    if (dataDir) {
+      await appendFile(join(dataDir, "webhook-runs.jsonl"), `${JSON.stringify(commentRecord)}\n`, "utf8");
+    }
+    if (orchestration.trueForge.status === "started" && trueForgeRuntime?.subscribeToTurn && dataDir) {
       void monitorTrueForgeTurn(dataDir, commentRecord, trueForgeRuntime, githubClient);
     }
 
@@ -390,9 +407,10 @@ function isMaintainerComment(authorAssociation: string | undefined, permission: 
 async function handleGitHubIssueCommentWebhook(
   payload: string,
   response: ServerResponse,
-  dataDir: string,
+  dataDir: string | undefined,
   githubClient: GitHubRestClientLike | undefined,
-  trueForgeRuntime: ByterSessionStarter | undefined
+  trueForgeRuntime: ByterSessionStarter | undefined,
+  activeIssueTriggers: Set<string>
 ): Promise<void> {
   let webhook: ReturnType<typeof parseIssueCommentWebhook>;
   try {
@@ -403,6 +421,20 @@ async function handleGitHubIssueCommentWebhook(
 
   if (webhook.action !== "created") {
     sendJson(response, 202, { ignored: true, reason: `Unsupported issue comment action: ${webhook.action}` });
+    return;
+  }
+
+  if (/(^|\n)\/byter\s+run(?:\s|$)/i.test(webhook.comment.body ?? "")) {
+    const issueWebhook: ReturnType<typeof parseIssueWebhook> = {
+      action: "opened",
+      issue: {
+        ...webhook.issue,
+        body: webhook.issue.body ? `${webhook.issue.body}\n\n/byter run` : "/byter run"
+      },
+      repository: webhook.repository
+    };
+    const commentDeliveryId = `comment-${createHash("sha256").update(`${webhook.repository.full_name}#${webhook.issue.number}:${Date.now()}`).digest("hex").slice(0, 12)}`;
+    await processIssueWebhook(issueWebhook, commentDeliveryId, response, dataDir, githubClient, trueForgeRuntime, activeIssueTriggers, true);
     return;
   }
 
@@ -438,6 +470,11 @@ async function handleGitHubIssueCommentWebhook(
 
   if (!isMaintainerComment(webhook.comment.author_association, permission)) {
     sendJson(response, 403, { error: "GitHub commenter is not a repository maintainer" });
+    return;
+  }
+
+  if (!dataDir) {
+    sendJson(response, 503, { error: "DATA_DIR is required for approval resolution" });
     return;
   }
 
@@ -1818,9 +1855,7 @@ async function acquireAtomicTriggerClaim(
   };
 
   try {
-    const handle = await open(claimPath, "wx");
-    await handle.writeFile(JSON.stringify({ key, time: now, token }));
-    await handle.close();
+    await writeFile(claimPath, JSON.stringify({ key, time: now, token }), { flag: "wx" });
     return {
       acquired: true,
       release: makeConditionalRelease(token)
@@ -1924,11 +1959,6 @@ async function readLatestJsonlRecord(dataDir: string, fileName: string): Promise
   let file;
   try {
     file = await open(join(dataDir, fileName), "r");
-  } catch {
-    return undefined;
-  }
-
-  try {
     const metadata = await file.stat();
     const length = Math.min(metadata.size, maxLatestRunReadBytes);
     const start = metadata.size - length;
@@ -1952,8 +1982,12 @@ async function readLatestJsonlRecord(dataDir: string, fileName: string): Promise
     }
 
     return latest;
+  } catch {
+    return undefined;
   } finally {
-    await file.close();
+    if (file) {
+      await file.close().catch(() => {});
+    }
   }
 }
 
