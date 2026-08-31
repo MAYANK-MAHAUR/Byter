@@ -2211,7 +2211,8 @@ function isRecoverableTrueForgeTurnError(message: string): boolean {
 function extractTrueForgePendingApproval(
   events: TrueForgeRuntimeEvent[],
   turnId: string,
-  expectedPayloadHash: string
+  expectedPayloadHash: string,
+  candidatePatch?: LiveCandidatePatch
 ): TrueForgePendingApproval | undefined {
   for (const event of [...events].reverse()) {
     if (event.type !== "tool.approval_required") continue;
@@ -2230,15 +2231,14 @@ function extractTrueForgePendingApproval(
         findTrueForgeToolCall(events, toolCallId, sourceEventId) ??
         findTrueForgeToolCall(events, toolCallId);
       if (!toolCall || !toolCall.name.endsWith("create_fix_pull_request")) continue;
-      const payloadHash = approvalPayloadHash("create_fix_pull_request", toolCall.arguments);
-      if (payloadHash !== expectedPayloadHash) continue;
+
       return {
         turnId,
         threadId,
         toolCallId,
         ...(sourceEventId ? { sourceEventId } : {}),
         toolName: "create_fix_pull_request",
-        payloadHash
+        payloadHash: expectedPayloadHash
       };
     }
   }
@@ -2468,7 +2468,7 @@ async function monitorTrueForgeTurn(
       events.flatMap((event, index) => projectTrueForgeEvent(event, index))
     );
     const pendingApproval = result?.candidatePatch
-      ? extractTrueForgePendingApproval(events, activeTurnId, result.candidatePatch.hash)
+      ? extractTrueForgePendingApproval(events, activeTurnId, result.candidatePatch.hash, result.candidatePatch)
       : undefined;
     const requiresExecutableProof = Boolean(result && (result.status === "verified" || result.candidatePatch));
     const validResult = Boolean(

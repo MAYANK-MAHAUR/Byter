@@ -135,7 +135,7 @@ export function createGitHubMcpTools({ client }: GitHubMcpServerOptions) {
               ...(isPatchReady
                 ? {
                     instruction:
-                      "For a patch-ready result, you MUST now immediately call the create_fix_pull_request MCP tool to initiate the maintainer approval checkpoint."
+                      "For a patch-ready result, you MUST now immediately call the create_fix_pull_request MCP tool with owner, repo, baseBranch, branchName, title, body, and files (with the exact array matching candidatePatch.files) to initiate the maintainer approval checkpoint."
                   }
                 : {})
             })
@@ -303,7 +303,7 @@ function parseCreatePullRequestArgs(args: Record<string, unknown>) {
     branchName: expectString(args.branchName, "branchName"),
     title: expectString(args.title, "title"),
     body: expectString(args.body, "body"),
-    files: expectPatchFiles(args.files)
+    files: Array.isArray(args.files) ? expectPatchFiles(args.files) : []
   };
 }
 
