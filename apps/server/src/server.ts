@@ -1545,9 +1545,12 @@ export function buildGitHubStatusComment(record: PersistedWebhookRunRecord, kind
       `**[View verification evidence →](${runUrl})**`
     );
   } else if (record.run.status === "failed") {
+    const failureReason = record.trueForge.error ?? record.run.events?.slice(-1)[0]?.message ?? "TrueForge completed without a valid proof contract.";
     lines.push(
       "",
       "> No genuine proof contract was returned. No verified label or repository mutation was made.",
+      "",
+      `**Failure reason:** ${safeCommentText(failureReason, 280)}`,
       "",
       "Review the run for bounded failure details."
     );

@@ -107,6 +107,15 @@ importers:
         specifier: ^2.1.1
         version: 2.1.9(@types/node@22.20.1)(lightningcss@1.33.0)
 
+  demo/buggy-parser:
+    devDependencies:
+      typescript:
+        specifier: ^5.5.4
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.1
+        version: 2.1.9(@types/node@22.20.1)(lightningcss@1.33.0)
+
   packages/agent:
     dependencies:
       '@byter/core':
