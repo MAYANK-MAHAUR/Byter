@@ -2396,7 +2396,12 @@ async function monitorTrueForgeTurn(
         console.error("TrueForge persisted event refresh failed", error);
       }
     }
-    if (completed && !result && trueForgeRuntime.requestProofContract) {
+    const maxContinuationTurns = 3;
+    for (
+      let continuationAttempt = 1;
+      completed && !result && trueForgeRuntime.requestProofContract && continuationAttempt <= maxContinuationTurns;
+      continuationAttempt += 1
+    ) {
       try {
         const recoveryTurn = await trueForgeRuntime.requestProofContract(record.trueForge.session.id);
         activeTurnId = recoveryTurn.id;
@@ -2406,7 +2411,7 @@ async function monitorTrueForgeTurn(
             ...liveRecord.trueForge,
             status: "started",
             turn: recoveryTurn,
-            error: "TrueForge proof contract recovery requested"
+            error: `TrueForge workflow continuation ${continuationAttempt}/${maxContinuationTurns} requested`
           }
         };
         await appendUpdatedLiveRecord(dataDir, liveRecord, postgresStore);
@@ -2427,7 +2432,8 @@ async function monitorTrueForgeTurn(
           result = await hydratePatchEvidence(result, record, githubClient);
         }
       } catch (error) {
-        console.error("TrueForge proof contract recovery failed", error);
+        console.error("TrueForge workflow continuation failed", error);
+        break;
       }
     }
     const eventMetadata = mergeHarnessEvents(

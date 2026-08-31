@@ -393,7 +393,7 @@ describe("Byter production server", () => {
     }
   });
 
-  it("binds a recovered approval checkpoint to the recovery turn", async () => {
+  it("continues across repeated token cutoffs and binds approval to the final turn", async () => {
     const staticDir = await mkdtemp(join(tmpdir(), "byter-static-"));
     const liveDataDir = await mkdtemp(join(tmpdir(), "byter-data-"));
     await writeFile(join(staticDir, "index.html"), "<main>Byter</main>", "utf8");
@@ -419,6 +419,11 @@ describe("Byter production server", () => {
       files: [{ path: "src/parser.ts", content: "export const fixed = true;\n" }]
     };
     const initialDoneEvent = { sequenceNumber: 1, type: "turn.done", raw: { state: { status: "done" } } };
+    const firstContinuationDoneEvent = {
+      sequenceNumber: 2,
+      type: "turn.done",
+      raw: { event: { id: "continuation-one-done", type: "turn.done", state: { status: "done" } } }
+    };
     const recoveryEvents = [
       ...executableProofEvents("recovery", 2),
       submittedResultEvent("recovery", 4, recoveryResult),
@@ -438,17 +443,23 @@ describe("Byter production server", () => {
         toolCalls: [{ id: "recovery-write-call", sourceEventId: "recovery-write-event" }]
       } } }
     ];
-    let listedRecoveryEvents = false;
+    let sessionListCount = 0;
     const trueForgeRuntime = {
       startSession: vi.fn().mockResolvedValue({
         session: { id: "session-recovery-1", title: null },
         turn: { id: "turn-recovery-1", sessionId: "session-recovery-1", status: "running" }
       }),
-      requestProofContract: vi.fn().mockResolvedValue({
-        id: "turn-recovery-2",
-        sessionId: "session-recovery-1",
-        status: "running"
-      }),
+      requestProofContract: vi.fn()
+        .mockResolvedValueOnce({
+          id: "turn-recovery-2",
+          sessionId: "session-recovery-1",
+          status: "running"
+        })
+        .mockResolvedValueOnce({
+          id: "turn-recovery-3",
+          sessionId: "session-recovery-1",
+          status: "running"
+        }),
       subscribeToTurn: vi.fn().mockImplementation(async (_sessionId: string, turnId: string) => {
         if (turnId === "turn-recovery-1") {
           return [initialDoneEvent];
@@ -456,11 +467,10 @@ describe("Byter production server", () => {
         throw new Error("Recovery stream disconnected");
       }),
       listSessionEvents: vi.fn().mockImplementation(async () => {
-        if (!listedRecoveryEvents) {
-          listedRecoveryEvents = true;
-          return [initialDoneEvent];
-        }
-        return [initialDoneEvent, ...recoveryEvents];
+        sessionListCount += 1;
+        if (sessionListCount === 1) return [initialDoneEvent];
+        if (sessionListCount === 2) return [initialDoneEvent, firstContinuationDoneEvent];
+        return [initialDoneEvent, firstContinuationDoneEvent, ...recoveryEvents];
       })
     };
     const githubClient = {
@@ -506,16 +516,17 @@ describe("Byter production server", () => {
         if (latest.run.status === "awaiting-approval") break;
         await new Promise((resolve) => setTimeout(resolve, 5));
       }
+      expect(trueForgeRuntime.requestProofContract).toHaveBeenCalledTimes(2);
       expect(trueForgeRuntime.requestProofContract).toHaveBeenCalledWith("session-recovery-1");
-      expect(trueForgeRuntime.subscribeToTurn).toHaveBeenCalledTimes(2);
-      expect(trueForgeRuntime.listSessionEvents).toHaveBeenCalledTimes(2);
+      expect(trueForgeRuntime.subscribeToTurn).toHaveBeenCalledTimes(3);
+      expect(trueForgeRuntime.listSessionEvents).toHaveBeenCalledTimes(3);
       expect(latest.run.status).toBe("awaiting-approval");
       expect(latest.trueForge.status).toBe("paused");
       expect(latest.trueForge.error).toBeUndefined();
       expect(latest.trueForge.result.status).toBe("patch-ready");
       const persistedLines = (await readFile(join(liveDataDir, "webhook-runs.jsonl"), "utf8")).trim().split("\n");
       const persisted = JSON.parse(persistedLines.at(-1)!);
-      expect(persisted.trueForge.pendingApproval.turnId).toBe("turn-recovery-2");
+      expect(persisted.trueForge.pendingApproval.turnId).toBe("turn-recovery-3");
       expect(githubClient.addLabels).toHaveBeenCalledWith("o", "r", 22, ["byter:verified"]);
       expect(githubClient.addLabels).toHaveBeenCalledWith("o", "r", 22, ["byter:awaiting-approval"]);
     } finally {

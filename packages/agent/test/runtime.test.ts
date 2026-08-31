@@ -135,7 +135,9 @@ describe("Byter TrueForge runtime", () => {
       sessionId: "session_1",
       status: "running"
     });
-    expect(buildProofContractRecoveryMessage()).toContain("Do not call tools");
+    expect(buildProofContractRecoveryMessage()).toContain("immediately use the sandbox exec tool");
+    expect(buildProofContractRecoveryMessage()).toContain("Do not reread repository files");
+    expect(buildProofContractRecoveryMessage()).toContain("Do not report blocked merely because the previous turn ended");
     expect(client.sessions.createTurn).toHaveBeenCalledWith(
       "session_1",
       expect.objectContaining({

@@ -141,11 +141,14 @@ export function buildInitialUserMessage(input: StartByterSessionInput): string {
 
 export function buildProofContractRecoveryMessage(): string {
   return [
-    "Your analysis turn is complete. Do not call tools and do not perform more investigation.",
-    "The runtime did not receive a valid byter.result object from the previous final response.",
-    "Convert only evidence actually observed in this session into exactly one raw JSON object using the enforced byter_result schema.",
+    "Continue the unfinished Byter workflow in this same persistent session.",
+    "The previous turn ended before the runtime received a valid byter.result object, commonly because the model reached its per-turn token limit.",
+    "Do not reread repository files or repeat completed inspection. Continue from evidence already present in the session.",
+    "If sandbox execution is incomplete, immediately use the sandbox exec tool. Keep commands short and combine repeated checks with a shell loop so the 3/3 before and after proof fits in this turn.",
+    "Apply and validate the candidate fix in the sandbox, then call submit_byter_result and create_fix_pull_request as required by the original workflow.",
+    "If executable proof is already complete, submit the result and request the gated write now.",
     "Keep all public-facing text fields concise and format them as GitHub-flavored Markdown. Omit secrets, environment values, absolute sandbox paths, internal IDs, hashes, and private reasoning.",
-    "Do not invent commands, test results, files, or a patch. If the evidence is incomplete, use status=blocked or failed and candidatePatch=null.",
-    "Call the read-only submit_byter_result MCP tool with that exact object if it is available, then return the same object with no markdown, fence, or prose."
+    "Do not invent commands, test results, files, or a patch. Do not report blocked merely because the previous turn ended; use blocked only after this continuation encounters a concrete execution or environment failure.",
+    "Call the read-only submit_byter_result MCP tool with the exact schema-valid object, then return the same object with no markdown, fence, or prose."
   ].join("\n");
 }
